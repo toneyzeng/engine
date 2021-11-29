@@ -404,7 +404,7 @@ class Color {
 enum BlendMode {
   // This list comes from Skia's SkXfermode.h and the values (order) should be
   // kept in sync.
-  // See: https://skia.org/user/api/skpaint#SkXfermode
+  // See: https://skia.org/docs/user/api/skpaint_overview/#SkXfermode
 
   /// Drop both the source and destination images, leaving nothing.
   ///
@@ -1577,8 +1577,13 @@ class Paint {
 enum ImageByteFormat {
   /// Raw RGBA format.
   ///
-  /// Unencoded bytes, in RGBA row-primary form, 8 bits per channel.
+  /// Unencoded bytes, in RGBA row-primary form with premultiplied alpha, 8 bits per channel.
   rawRgba,
+
+  /// Raw straight RGBA format.
+  ///
+  /// Unencoded bytes, in RGBA row-primary form with straight alpha, 8 bits per channel.
+  rawStraightRgba,
 
   /// Raw unmodified format.
   ///
@@ -1831,7 +1836,7 @@ class Image {
 }
 
 @pragma('vm:entry-point')
-class _Image extends NativeFieldWrapperClass2 {
+class _Image extends NativeFieldWrapperClass1 {
   // This class is created by the engine, and should not be instantiated
   // or extended directly.
   //
@@ -1953,7 +1958,7 @@ class FrameInfo {
 /// To obtain an instance of the [Codec] interface, see
 /// [instantiateImageCodec].
 @pragma('vm:entry-point')
-class Codec extends NativeFieldWrapperClass2 {
+class Codec extends NativeFieldWrapperClass1 {
   //
   // This class is created by the engine, and should not be instantiated
   // or extended directly.
@@ -2238,7 +2243,7 @@ enum PathOperation {
 
 /// A handle for the framework to hold and retain an engine layer across frames.
 @pragma('vm:entry-point')
-class EngineLayer extends NativeFieldWrapperClass2 {
+class EngineLayer extends NativeFieldWrapperClass1 {
   /// This class is created by the engine, and should not be instantiated
   /// or extended directly.
   @pragma('vm:entry-point')
@@ -2277,7 +2282,7 @@ class EngineLayer extends NativeFieldWrapperClass2 {
 /// Paths can be drawn on canvases using [Canvas.drawPath], and can
 /// used to create clip regions using [Canvas.clipPath].
 @pragma('vm:entry-point')
-class Path extends NativeFieldWrapperClass2 {
+class Path extends NativeFieldWrapperClass1 {
   /// Create a new empty [Path] object.
   @pragma('vm:entry-point')
   Path() { _constructor(); }
@@ -2495,8 +2500,7 @@ class Path extends NativeFieldWrapperClass2 {
   }
   void _addRRect(Float32List rrect) native 'Path_addRRect';
 
-  /// Adds a new sub-path that consists of the given `path` offset by the given
-  /// `offset`.
+  /// Adds the sub-paths of `path`, offset by `offset`, to this path.
   ///
   /// If `matrix4` is specified, the path will be transformed by this matrix
   /// after the matrix is translated by the given offset. The matrix is a 4x4
@@ -2514,8 +2518,9 @@ class Path extends NativeFieldWrapperClass2 {
   void _addPath(Path path, double dx, double dy) native 'Path_addPath';
   void _addPathWithMatrix(Path path, double dx, double dy, Float64List matrix) native 'Path_addPathWithMatrix';
 
-  /// Adds the given path to this path by extending the current segment of this
-  /// path with the first segment of the given path.
+  /// Adds the sub-paths of `path`, offset by `offset`, to this path.
+  /// The current sub-path is extended with the first sub-path
+  /// of `path`, connecting them with a lineTo if necessary.
   ///
   /// If `matrix4` is specified, the path will be transformed by this matrix
   /// after the matrix is translated by the given `offset`.  The matrix is a 4x4
@@ -2828,7 +2833,7 @@ class PathMetric {
   String toString() => '$runtimeType{length: $length, isClosed: $isClosed, contourIndex:$contourIndex}';
 }
 
-class _PathMeasure extends NativeFieldWrapperClass2 {
+class _PathMeasure extends NativeFieldWrapperClass1 {
   _PathMeasure(Path path, bool forceClosed) {
     _constructor(path, forceClosed);
   }
@@ -3158,7 +3163,7 @@ class ColorFilter implements ImageFilter {
 /// ColorFilter, because we want ColorFilter to be const constructible and
 /// efficiently comparable, so that widgets can check for ColorFilter equality to
 /// avoid repainting.
-class _ColorFilter extends NativeFieldWrapperClass2 {
+class _ColorFilter extends NativeFieldWrapperClass1 {
   _ColorFilter.mode(this.creator)
     : assert(creator != null),
       assert(creator._type == ColorFilter._kTypeMode) {
@@ -3354,7 +3359,7 @@ class _ComposeImageFilter implements ImageFilter {
 /// This is a private class, rather than being the implementation of the public
 /// ImageFilter, because we want ImageFilter to be efficiently comparable, so that
 /// widgets can check for ImageFilter equality to avoid repainting.
-class _ImageFilter extends NativeFieldWrapperClass2 {
+class _ImageFilter extends NativeFieldWrapperClass1 {
   void _constructor() native 'ImageFilter_constructor';
 
   /// Creates an image filter that applies a Gaussian blur.
@@ -3407,7 +3412,7 @@ class _ImageFilter extends NativeFieldWrapperClass2 {
 
 /// Base class for objects such as [Gradient] and [ImageShader] which
 /// correspond to shaders as used by [Paint.shader].
-class Shader extends NativeFieldWrapperClass2 {
+class Shader extends NativeFieldWrapperClass1 {
   /// This class is created by the engine, and should not be instantiated
   /// or extended directly.
   @pragma('vm:entry-point')
@@ -3456,6 +3461,7 @@ enum TileMode {
   ///
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_clamp_linear.png)
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_clamp_radial.png)
+  /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_clamp_sweep.png)
   clamp,
 
   /// Samples beyond the edge are repeated from the far end of the defined area.
@@ -3469,6 +3475,7 @@ enum TileMode {
   ///
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_repeated_linear.png)
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_repeated_radial.png)
+  /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_repeated_sweep.png)
   repeated,
 
   /// Samples beyond the edge are mirrored back and forth across the defined area.
@@ -3484,6 +3491,7 @@ enum TileMode {
   ///
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_mirror_linear.png)
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_mirror_radial.png)
+  /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_mirror_sweep.png)
   mirror,
 
   /// Samples beyond the edge are treated as transparent black.
@@ -3497,6 +3505,7 @@ enum TileMode {
   ///
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_decal_linear.png)
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_decal_radial.png)
+  /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_decal_sweep.png)
   decal,
 }
 
@@ -3558,6 +3567,7 @@ class Gradient extends Shader {
   /// argument. For details, see the [TileMode] enum.
   ///
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_clamp_linear.png)
+  /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_decal_linear.png)
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_mirror_linear.png)
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_repeated_linear.png)
   ///
@@ -3602,6 +3612,7 @@ class Gradient extends Shader {
   /// argument. For details, see the [TileMode] enum.
   ///
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_clamp_radial.png)
+  /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_decal_radial.png)
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_mirror_radial.png)
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_repeated_radial.png)
   ///
@@ -3667,6 +3678,7 @@ class Gradient extends Shader {
   /// `tileMode` argument. For details, see the [TileMode] enum.
   ///
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_clamp_sweep.png)
+  /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_decal_sweep.png)
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_mirror_sweep.png)
   /// ![](https://flutter.github.io/assets-for-api-docs/assets/dart-ui/tile_mode_repeated_sweep.png)
   ///
@@ -3739,6 +3751,164 @@ class ImageShader extends Shader {
   void _initWithImage(_Image image, int tmx, int tmy, int filterQualityIndex, Float64List matrix4) native 'ImageShader_initWithImage';
 }
 
+/// An instance of [FragmentProgram] creates [Shader] objects (as used by [Paint.shader]) that run SPIR-V code.
+///
+/// This API is in beta and does not yet work on web.
+/// See https://github.com/flutter/flutter/projects/207 for roadmap.
+///
+/// [A current specification of valid SPIR-V is here.](https://github.com/flutter/engine/blob/main/lib/spirv/README.md)
+///
+class FragmentProgram extends NativeFieldWrapperClass1 {
+
+  /// Creates a fragment program from SPIR-V byte data as an input.
+  ///
+  /// One instance should be created per SPIR-V input. The constructed object
+  /// should then be reused via the [shader] method to create [Shader] objects
+  /// that can be used by [Shader.paint].
+  ///
+  /// [A current specification of valid SPIR-V is here.](https://github.com/flutter/engine/blob/master/lib/spirv/README.md)
+  /// SPIR-V not meeting this specification will throw an exception.
+  static Future<FragmentProgram> compile({
+    required ByteBuffer spirv,
+    bool debugPrint = false,
+  }) {
+    return Future<FragmentProgram>(() => FragmentProgram._(spirv: spirv, debugPrint: debugPrint));
+  }
+
+  @pragma('vm:entry-point')
+  FragmentProgram._({
+    required ByteBuffer spirv,
+    bool debugPrint = false,
+  }) {
+    _constructor();
+    final spv.TranspileResult result = spv.transpile(
+      spirv,
+      spv.TargetLanguage.sksl,
+    );
+    _init(result.src, debugPrint);
+    _uniformFloatCount = result.uniformFloatCount;
+    _samplerCount = result.samplerCount;
+  }
+
+  late final int _uniformFloatCount;
+  late final int _samplerCount;
+
+  void _constructor() native 'FragmentProgram_constructor';
+  void _init(String sksl, bool debugPrint) native 'FragmentProgram_init';
+
+  /// Constructs a [Shader] object suitable for use by [Paint.shader] with
+  /// the given uniforms.
+  ///
+  /// This method is suitable to be called synchronously within a widget's
+  /// `build` method or from [CustomPainter.paint].
+  ///
+  /// `floatUniforms` can be passed optionally to initialize the shader's
+  /// uniforms. If they are not set they will each default to 0.
+  ///
+  /// When initializing `floatUniforms`, the length of float uniforms must match
+  /// the total number of floats defined as uniforms in the shader, or an
+  /// [ArgumentError] will be thrown. Details are below.
+  ///
+  /// Consider the following snippit of GLSL code.
+  ///
+  /// ```
+  /// layout (location = 0) uniform float a;
+  /// layout (location = 1) uniform vec2 b;
+  /// layout (location = 2) uniform vec3 c;
+  /// layout (location = 3) uniform mat2x2 d;
+  /// ```
+  ///
+  /// When compiled to SPIR-V and provided to the constructor, `floatUniforms`
+  /// must have a length of 10. One per float-component of each uniform.
+  ///
+  /// `program.shader(floatUniforms: Float32List.fromList([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));`
+  ///
+  /// The uniforms will be set as follows:
+  ///
+  /// a: 1
+  /// b: [2, 3]
+  /// c: [4, 5, 6]
+  /// d: [7, 8, 9, 10] // 2x2 matrix in column-major order
+  ///
+  /// `imageSamplers` must also be sized correctly, matching the number of UniformConstant
+  /// variables of type SampledImage specified in the SPIR-V code.
+  ///
+  /// Consider the following snippit of GLSL code.
+  ///
+  /// ```
+  /// layout (location = 0) uniform sampler2D a;
+  /// layout (location = 1) uniform sampler2D b;
+  /// ```
+  ///
+  /// After being compiled to SPIR-V  `imageSamplers` must have a length
+  /// of 2.
+  ///
+  /// Once a [Shader] is built, uniform values cannot be changed. Instead,
+  /// [shader] must be called again with new uniform values.
+  Shader shader({
+    Float32List? floatUniforms,
+    List<ImageShader>? samplerUniforms,
+  }) {
+    if (floatUniforms == null) {
+      floatUniforms = Float32List(_uniformFloatCount);
+    }
+    if (floatUniforms.length != _uniformFloatCount) {
+      throw ArgumentError(
+        'floatUniforms size: ${floatUniforms.length} must match given shader uniform count: $_uniformFloatCount.');
+    }
+    if (_samplerCount > 0 && (samplerUniforms == null || samplerUniforms.length != _samplerCount)) {
+      throw ArgumentError('samplerUniforms must have length $_samplerCount');
+    }
+    if (samplerUniforms == null) {
+      samplerUniforms = <ImageShader>[];
+    } else {
+      samplerUniforms = <ImageShader>[...samplerUniforms];
+    }
+    final _FragmentShader shader = _FragmentShader(
+        this, Float32List.fromList(floatUniforms), samplerUniforms);
+    _shader(shader, floatUniforms, samplerUniforms);
+    return shader;
+  }
+
+  void _shader(
+    _FragmentShader shader,
+    Float32List floatUniforms,
+    List<ImageShader> samplerUniforms,
+  ) native 'FragmentProgram_shader';
+}
+
+@pragma('vm:entry-point')
+class _FragmentShader extends Shader {
+  /// This class is created by the engine and should not be instantiated
+  /// or extended directly.
+  ///
+  /// To create a [_FragmentShader], use a [FragmentProgram].
+  _FragmentShader(
+    this._builder,
+    this._floatUniforms,
+    this._samplerUniforms,
+  ) : super._();
+
+  final FragmentProgram _builder;
+  final Float32List _floatUniforms;
+  final List<ImageShader> _samplerUniforms;
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other))
+      return true;
+    if (other.runtimeType != runtimeType)
+      return false;
+    return other is _FragmentShader
+        && other._builder == _builder
+        && _listEquals<double>(other._floatUniforms, _floatUniforms)
+        && _listEquals<ImageShader>(other._samplerUniforms, _samplerUniforms);
+  }
+
+  @override
+  int get hashCode => hashValues(_builder, hashList(_floatUniforms), hashList(_samplerUniforms));
+}
+
 /// Defines how a list of points is interpreted when drawing a set of triangles.
 ///
 /// Used by [Canvas.drawVertices].
@@ -3755,7 +3925,7 @@ enum VertexMode {
 }
 
 /// A set of vertex data used by [Canvas.drawVertices].
-class Vertices extends NativeFieldWrapperClass2 {
+class Vertices extends NativeFieldWrapperClass1 {
   /// Creates a set of vertex data for use with [Canvas.drawVertices].
   ///
   /// The [mode] and [positions] parameters must not be null.
@@ -3900,7 +4070,7 @@ enum ClipOp {
 ///
 /// The current transform and clip can be saved and restored using the stack
 /// managed by the [save], [saveLayer], and [restore] methods.
-class Canvas extends NativeFieldWrapperClass2 {
+class Canvas extends NativeFieldWrapperClass1 {
   /// Creates a canvas for recording graphical operations into the
   /// given picture recorder.
   ///
@@ -4166,7 +4336,6 @@ class Canvas extends NativeFieldWrapperClass2 {
   /// If [doAntiAlias] is true, then the clip will be anti-aliased.
   ///
   /// If multiple draw commands intersect with the clip boundary, this can result
-  /// multiple draw commands intersect with the clip boundary, this can result
   /// in incorrect blending at the clip boundary. See [saveLayer] for a
   /// discussion of how to address that.
   void clipPath(Path path, {bool doAntiAlias = true}) {
@@ -4900,7 +5069,7 @@ class Canvas extends NativeFieldWrapperClass2 {
 /// the [SceneBuilder.addPicture] method. A [Picture] can also be
 /// drawn into a [Canvas], using the [Canvas.drawPicture] method.
 @pragma('vm:entry-point')
-class Picture extends NativeFieldWrapperClass2 {
+class Picture extends NativeFieldWrapperClass1 {
   /// This class is created by the engine, and should not be instantiated
   /// or extended directly.
   ///
@@ -4947,7 +5116,7 @@ class Picture extends NativeFieldWrapperClass2 {
 ///
 /// To begin recording, construct a [Canvas] to record the commands.
 /// To end recording, use the [PictureRecorder.endRecording] method.
-class PictureRecorder extends NativeFieldWrapperClass2 {
+class PictureRecorder extends NativeFieldWrapperClass1 {
   /// Creates a new idle PictureRecorder. To associate it with a
   /// [Canvas] and begin recording, pass this [PictureRecorder] to the
   /// [Canvas] constructor.
@@ -5191,7 +5360,7 @@ class Shadow {
 ///
 /// The creator of this object is responsible for calling [dispose] when it is
 /// no longer needed.
-class ImmutableBuffer extends NativeFieldWrapperClass2 {
+class ImmutableBuffer extends NativeFieldWrapperClass1 {
   ImmutableBuffer._(this.length);
 
   /// Creates a copy of the data from a [Uint8List] suitable for internal use
@@ -5246,7 +5415,7 @@ class ImmutableBuffer extends NativeFieldWrapperClass2 {
 ///
 /// Use this class to determine the height, width, and byte size of image data
 /// before decoding it.
-class ImageDescriptor extends NativeFieldWrapperClass2 {
+class ImageDescriptor extends NativeFieldWrapperClass1 {
   ImageDescriptor._();
 
   /// Creates an image descriptor from encoded data in a supported format.

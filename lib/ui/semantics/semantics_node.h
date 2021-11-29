@@ -44,11 +44,16 @@ enum class SemanticsAction : int32_t {
   kSetText = 1 << 21,
 };
 
-const int kScrollableSemanticsActions =
-    static_cast<int32_t>(SemanticsAction::kScrollLeft) |
-    static_cast<int32_t>(SemanticsAction::kScrollRight) |
+const int kVerticalScrollSemanticsActions =
     static_cast<int32_t>(SemanticsAction::kScrollUp) |
     static_cast<int32_t>(SemanticsAction::kScrollDown);
+
+const int kHorizontalScrollSemanticsActions =
+    static_cast<int32_t>(SemanticsAction::kScrollLeft) |
+    static_cast<int32_t>(SemanticsAction::kScrollRight);
+
+const int kScrollableSemanticsActions =
+    kVerticalScrollSemanticsActions | kHorizontalScrollSemanticsActions;
 
 /// C/C++ representation of `SemanticsFlags` defined in
 /// `lib/ui/semantics.dart`.
@@ -126,6 +131,7 @@ struct SemanticsNode {
   StringAttributes increasedValueAttributes;
   std::string decreasedValue;
   StringAttributes decreasedValueAttributes;
+  std::string tooltip;
   int32_t textDirection = 0;  // 0=unknown, 1=rtl, 2=ltr
 
   SkRect rect = SkRect::MakeEmpty();  // Local space, relative to parent.

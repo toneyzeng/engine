@@ -2,9 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'package:ui/src/engine.dart' show frameReferences;
+import 'package:meta/meta.dart';
 import 'package:ui/ui.dart' as ui;
 
+import '../frame_reference.dart';
 import 'canvas.dart';
 import 'embedded_views.dart';
 import 'layer_tree.dart';
@@ -57,5 +58,11 @@ class Rasterizer {
       frameReferences[i].value = null;
     }
     frameReferences.clear();
+  }
+
+  /// Forces the post-frame callbacks to run. Useful in tests.
+  @visibleForTesting
+  void debugRunPostFrameCallbacks() {
+    _runPostFrameCallbacks();
   }
 }

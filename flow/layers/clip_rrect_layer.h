@@ -13,11 +13,7 @@ class ClipRRectLayer : public ContainerLayer {
  public:
   ClipRRectLayer(const SkRRect& clip_rrect, Clip clip_behavior);
 
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
-
   void Diff(DiffContext* context, const Layer* old_layer) override;
-
-#endif  // FLUTTER_ENABLE_DIFF_CONTEXT
 
   void Preroll(PrerollContext* context, const SkMatrix& matrix) override;
 
@@ -26,10 +22,6 @@ class ClipRRectLayer : public ContainerLayer {
   bool UsesSaveLayer() const {
     return clip_behavior_ == Clip::antiAliasWithSaveLayer;
   }
-
-#if defined(LEGACY_FUCHSIA_EMBEDDER)
-  void UpdateScene(std::shared_ptr<SceneUpdateContext> context) override;
-#endif
 
  private:
   SkRRect clip_rrect_;

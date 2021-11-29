@@ -75,22 +75,22 @@ void testMain() {
 
     createTextFieldSemantics(value: 'hello');
 
-    final html.Element textField = appShadowRoot
+    final html.Element textField = appHostNode
         .querySelector('input[data-semantics-role="text-field"]')!;
 
-    expect(appShadowRoot.activeElement, isNot(textField));
+    expect(appHostNode.activeElement, isNot(textField));
 
     textField.focus();
 
-    expect(appShadowRoot.activeElement, textField);
+    expect(appHostNode.activeElement, textField);
     expect(await logger.idLog.first, 0);
     expect(await logger.actionLog.first, ui.SemanticsAction.tap);
 
     semantics().semanticsEnabled = false;
-  },  // TODO(nurhan): https://github.com/flutter/flutter/issues/46638
-      // TODO(nurhan): https://github.com/flutter/flutter/issues/50590
-      // TODO(nurhan): https://github.com/flutter/flutter/issues/50754
-      skip: (browserEngine != BrowserEngine.blink));
+  },  // TODO(yjbanov): https://github.com/flutter/flutter/issues/46638
+      // TODO(yjbanov): https://github.com/flutter/flutter/issues/50590
+      // TODO(yjbanov): https://github.com/flutter/flutter/issues/50754
+      skip: browserEngine != BrowserEngine.blink);
 
     test('Syncs editing state from framework', () async {
       semantics()
@@ -98,7 +98,7 @@ void testMain() {
         ..semanticsEnabled = true;
 
       expect(html.document.activeElement, html.document.body);
-      expect(appShadowRoot.activeElement, null);
+      expect(appHostNode.activeElement, null);
 
       int changeCount = 0;
       int actionCount = 0;
@@ -113,16 +113,16 @@ void testMain() {
       );
 
       // Create
-      SemanticsObject textFieldSemantics = createTextFieldSemantics(
+      final SemanticsObject textFieldSemantics = createTextFieldSemantics(
         value: 'hello',
         label: 'greeting',
         isFocused: true,
-        rect: ui.Rect.fromLTWH(0, 0, 10, 15),
+        rect: const ui.Rect.fromLTWH(0, 0, 10, 15),
       );
 
-      TextField textField = textFieldSemantics.debugRoleManagerFor(Role.textField) as TextField;
+      final TextField textField = textFieldSemantics.debugRoleManagerFor(Role.textField)! as TextField;
       expect(html.document.activeElement, domRenderer.glassPaneElement);
-      expect(appShadowRoot.activeElement, strategy.domElement);
+      expect(appHostNode.activeElement, strategy.domElement);
       expect(textField.editableElement, strategy.domElement);
       expect((textField.editableElement as dynamic).value, 'hello');
       expect(textField.editableElement.getAttribute('aria-label'), 'greeting');
@@ -134,11 +134,11 @@ void testMain() {
         value: 'bye',
         label: 'farewell',
         isFocused: false,
-        rect: ui.Rect.fromLTWH(0, 0, 12, 17),
+        rect: const ui.Rect.fromLTWH(0, 0, 12, 17),
       );
 
       expect(html.document.activeElement, html.document.body);
-      expect(appShadowRoot.activeElement, null);
+      expect(appHostNode.activeElement, null);
       expect(strategy.domElement, null);
       expect((textField.editableElement as dynamic).value, 'bye');
       expect(textField.editableElement.getAttribute('aria-label'), 'farewell');
@@ -160,7 +160,7 @@ void testMain() {
         ..semanticsEnabled = true;
 
       expect(html.document.activeElement, html.document.body);
-      expect(appShadowRoot.activeElement, null);
+      expect(appHostNode.activeElement, null);
 
       strategy.enable(
         singlelineConfig,
@@ -172,15 +172,15 @@ void testMain() {
         isFocused: true,
       );
 
-      final TextField textField = textFieldSemantics.debugRoleManagerFor(Role.textField) as TextField;
+      final TextField textField = textFieldSemantics.debugRoleManagerFor(Role.textField)! as TextField;
       expect(textField.editableElement, strategy.domElement);
       expect(html.document.activeElement, domRenderer.glassPaneElement);
-      expect(appShadowRoot.activeElement, strategy.domElement);
+      expect(appHostNode.activeElement, strategy.domElement);
 
       // The input should not refocus after blur.
       textField.editableElement.blur();
       expect(html.document.activeElement, html.document.body);
-      expect(appShadowRoot.activeElement, null);
+      expect(appHostNode.activeElement, null);
       strategy.disable();
       semantics().semanticsEnabled = false;
     });
@@ -206,18 +206,18 @@ void testMain() {
       );
       expect(strategy.domElement, isNotNull);
       expect(html.document.activeElement, domRenderer.glassPaneElement);
-      expect(appShadowRoot.activeElement, strategy.domElement);
+      expect(appHostNode.activeElement, strategy.domElement);
 
       strategy.disable();
       expect(strategy.domElement, isNull);
 
       // It doesn't remove the DOM element.
-      final TextField textField = textFieldSemantics.debugRoleManagerFor(Role.textField) as TextField;
-      expect(appShadowRoot.contains(textField.editableElement), isTrue);
+      final TextField textField = textFieldSemantics.debugRoleManagerFor(Role.textField)! as TextField;
+      expect(appHostNode.contains(textField.editableElement), isTrue);
       // Editing element is not enabled.
       expect(strategy.isEnabled, isFalse);
       expect(html.document.activeElement, html.document.body);
-      expect(appShadowRoot.activeElement, null);
+      expect(appHostNode.activeElement, null);
       semantics().semanticsEnabled = false;
     });
 
@@ -238,12 +238,12 @@ void testMain() {
       );
       expect(strategy.domElement, isNotNull);
       expect(html.document.activeElement, domRenderer.glassPaneElement);
-      expect(appShadowRoot.activeElement, strategy.domElement);
+      expect(appHostNode.activeElement, strategy.domElement);
 
       // Blur the element without telling the framework.
       strategy.activeDomElement.blur();
       expect(html.document.activeElement, html.document.body);
-      expect(appShadowRoot.activeElement, null);
+      expect(appHostNode.activeElement, null);
 
       // The input will have focus after editing state is set and semantics updated.
       strategy.setEditingState(EditingState(text: 'foo'));
@@ -262,7 +262,7 @@ void testMain() {
         isFocused: true,
       );
       expect(html.document.activeElement, domRenderer.glassPaneElement);
-      expect(appShadowRoot.activeElement, strategy.domElement);
+      expect(appHostNode.activeElement, strategy.domElement);
 
       strategy.disable();
       semantics().semanticsEnabled = false;
@@ -284,10 +284,10 @@ void testMain() {
         isMultiline: true,
       );
 
-      final html.TextAreaElement textArea = strategy.domElement as html.TextAreaElement;
+      final html.TextAreaElement textArea = strategy.domElement! as html.TextAreaElement;
 
       expect(html.document.activeElement, domRenderer.glassPaneElement);
-      expect(appShadowRoot.activeElement, strategy.domElement);
+      expect(appHostNode.activeElement, strategy.domElement);
 
       strategy.enable(
         singlelineConfig,
@@ -297,11 +297,11 @@ void testMain() {
 
       textArea.blur();
       expect(html.document.activeElement, html.document.body);
-      expect(appShadowRoot.activeElement, null);
+      expect(appHostNode.activeElement, null);
 
       strategy.disable();
       // It doesn't remove the textarea from the DOM.
-      expect(appShadowRoot.contains(textArea), isTrue);
+      expect(appHostNode.contains(textArea), isTrue);
       // Editing element is not enabled.
       expect(strategy.isEnabled, isFalse);
       semantics().semanticsEnabled = false;
@@ -325,7 +325,7 @@ void testMain() {
         width: 13,
         globalTransform: Matrix4.translationValues(14, 15, 0).storage,
       );
-      final ui.Rect semanticsRect = ui.Rect.fromLTRB(0, 0, 100, 50);
+      const ui.Rect semanticsRect = ui.Rect.fromLTRB(0, 0, 100, 50);
 
       testTextEditing.acceptCommand(
         TextInputSetEditableSizeAndTransform(geometry: geometry),
@@ -361,14 +361,14 @@ void testMain() {
             isTextField: true,
             value: 'Hello',
             isFocused: focusFieldId == 1,
-            rect: ui.Rect.fromLTRB(0, 0, 50, 10),
+            rect: const ui.Rect.fromLTRB(0, 0, 50, 10),
           ),
           builder.updateNode(
             id: 2,
             isTextField: true,
             value: 'World',
             isFocused: focusFieldId == 2,
-            rect: ui.Rect.fromLTRB(0, 20, 50, 10),
+            rect: const ui.Rect.fromLTRB(0, 20, 50, 10),
           ),
         ],
       );
@@ -393,19 +393,19 @@ void testMain() {
         expect(tester.apply().length, 3);
 
         expect(html.document.activeElement, domRenderer.glassPaneElement);
-        expect(appShadowRoot.activeElement, tester.getTextField(1).editableElement);
+        expect(appHostNode.activeElement, tester.getTextField(1).editableElement);
         expect(strategy.domElement, tester.getTextField(1).editableElement);
 
         createTwoFieldSemantics(tester, focusFieldId: 2);
         expect(tester.apply().length, 3);
-        expect(appShadowRoot.activeElement, tester.getTextField(2).editableElement);
+        expect(appHostNode.activeElement, tester.getTextField(2).editableElement);
         expect(strategy.domElement, tester.getTextField(2).editableElement);
       }
 
       semantics().semanticsEnabled = false;
     });
   },
-  // TODO(nurhan): https://github.com/flutter/flutter/issues/50769
+  // TODO(mdebbar): https://github.com/flutter/flutter/issues/50769
   skip: browserEngine == BrowserEngine.edge);
 }
 

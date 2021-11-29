@@ -116,7 +116,9 @@ struct MouseState {
 @property(nonatomic) id keyUpMonitor;
 
 /**
- * TODO
+ * Pointer to a keyboard manager, a hub that manages how key events are
+ * dispatched to various Flutter key responders, and whether the event is
+ * propagated to the next NSResponder.
  */
 @property(nonatomic) FlutterKeyboardManager* keyboardManager;
 
@@ -135,6 +137,11 @@ struct MouseState {
  * Creates and registers plugins used by this view controller.
  */
 - (void)addInternalPlugins;
+
+/**
+ * Creates and registers keyboard related components.
+ */
+- (void)initializeKeyboard;
 
 /**
  * Calls dispatchMouseEvent:phase: with a phase determined by self.mouseState.
@@ -247,6 +254,10 @@ static void CommonInit(FlutterViewController* controller) {
              selector:@selector(onAccessibilityStatusChanged:)
                  name:EnhancedUserInterfaceNotification
                object:nil];
+  [center addObserver:controller
+             selector:@selector(applicationWillTerminate:)
+                 name:NSApplicationWillTerminateNotification
+               object:nil];
 }
 
 - (instancetype)initWithCoder:(NSCoder*)coder {
@@ -356,6 +367,10 @@ static void CommonInit(FlutterViewController* controller) {
   [self configureTrackingArea];
 }
 
+- (void)onPreEngineRestart {
+  [self initializeKeyboard];
+}
+
 #pragma mark - Private methods
 
 - (BOOL)launchEngine {
@@ -389,8 +404,9 @@ static void CommonInit(FlutterViewController* controller) {
                                          ([[event window] firstResponder] ==
                                           weakSelf.flutterView) &&
                                          ([event modifierFlags] & NSEventModifierFlagCommand) &&
-                                         ([event type] == NSEventTypeKeyUp))
+                                         ([event type] == NSEventTypeKeyUp)) {
                                        [weakSelf keyUp:event];
+                                     }
                                      return event;
                                    }];
 }
@@ -429,9 +445,9 @@ static void CommonInit(FlutterViewController* controller) {
   }
 }
 
-- (void)addInternalPlugins {
+- (void)initializeKeyboard {
   __weak FlutterViewController* weakSelf = self;
-  [FlutterMouseCursorPlugin registerWithRegistrar:[self registrarForPlugin:@"mousecursor"]];
+  _textInputPlugin = [[FlutterTextInputPlugin alloc] initWithViewController:weakSelf];
   _keyboardManager = [[FlutterKeyboardManager alloc] initWithOwner:weakSelf];
   [_keyboardManager addPrimaryResponder:[[FlutterEmbedderKeyResponder alloc]
                                             initWithSendEvent:^(const FlutterKeyEvent& event,
@@ -449,6 +465,12 @@ static void CommonInit(FlutterViewController* controller) {
                                                                    codec:[FlutterJSONMessageCodec
                                                                              sharedInstance]]]];
   [_keyboardManager addSecondaryResponder:_textInputPlugin];
+}
+
+- (void)addInternalPlugins {
+  __weak FlutterViewController* weakSelf = self;
+  [FlutterMouseCursorPlugin registerWithRegistrar:[self registrarForPlugin:@"mousecursor"]];
+  [self initializeKeyboard];
   _settingsChannel =
       [FlutterBasicMessageChannel messageChannelWithName:@"flutter/settings"
                                          binaryMessenger:_engine.binaryMessenger
@@ -538,6 +560,13 @@ static void CommonInit(FlutterViewController* controller) {
   } else if (phase == kRemove) {
     _mouseState.Reset();
   }
+}
+
+- (void)applicationWillTerminate:(NSNotification*)notification {
+  if (!_engine) {
+    return;
+  }
+  [_engine shutDownEngine];
 }
 
 - (void)onAccessibilityStatusChanged:(NSNotification*)notification {

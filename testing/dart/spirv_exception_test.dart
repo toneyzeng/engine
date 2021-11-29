@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.6
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:spirv/spirv.dart' as spirv;
-import 'package:path/path.dart' as path;
 import 'package:litetest/litetest.dart';
+import 'package:path/path.dart' as path;
+import 'package:spirv/spirv.dart' as spirv;
+
+import 'shader_test_file_utils.dart';
 
 const List<spirv.TargetLanguage> targets = <spirv.TargetLanguage>[
   spirv.TargetLanguage.sksl,
@@ -19,7 +20,7 @@ const List<spirv.TargetLanguage> targets = <spirv.TargetLanguage>[
 void main() {
   test('spirv transpiler throws exceptions', () async {
     int count = 0;
-    await for (final Uint8List shader in exceptionShaders()) {
+    await for (final Uint8List shader in _exceptionShaders()) {
       for (final spirv.TargetLanguage target in targets) {
         expect(() => spirv.transpile(shader.buffer, target), throwsException);
       }
@@ -31,26 +32,16 @@ void main() {
   });
 }
 
-Stream<Uint8List> exceptionShaders() async* {
-  final Directory dir = Directory(path.joinAll(<String>[
-    'out',
-    'host_debug_unopt',
-    'gen',
-    'flutter',
-    'lib',
-    'spirv',
-    'test',
-    'exception_shaders',
-  ]));
+Stream<Uint8List> _exceptionShaders() async* {
+  final Directory dir = spvDirectory('exception_shaders');
   await for (final FileSystemEntity entry in dir.list()) {
     if (entry is! File) {
       continue;
     }
-    final File file = entry as File;
+    final File file = entry;
     if (path.extension(file.path) != '.spv') {
       continue;
     }
     yield file.readAsBytesSync();
   }
 }
-

@@ -8,10 +8,7 @@
 
 #include "flutter/fml/make_copyable.h"
 #include "flutter/fml/synchronization/waitable_event.h"
-#include "flutter/shell/common/rasterizer.h"
-#include "flutter/shell/common/shell.h"
 #include "flutter/shell/common/vsync_waiter_fallback.h"
-#include "third_party/skia/include/gpu/GrContextOptions.h"
 #include "third_party/skia/include/gpu/gl/GrGLInterface.h"
 
 namespace flutter {
@@ -42,12 +39,6 @@ void PlatformView::DispatchPointerDataPacket(
       pointer_data_packet_converter_.Convert(std::move(packet)));
 }
 
-void PlatformView::DispatchKeyDataPacket(std::unique_ptr<KeyDataPacket> packet,
-                                         KeyDataResponse callback) {
-  delegate_.OnPlatformViewDispatchKeyDataPacket(std::move(packet),
-                                                std::move(callback));
-}
-
 void PlatformView::DispatchSemanticsAction(int32_t id,
                                            SemanticsAction action,
                                            fml::MallocMapping args) {
@@ -68,7 +59,6 @@ void PlatformView::SetViewportMetrics(const ViewportMetrics& metrics) {
 
 void PlatformView::NotifyCreated() {
   std::unique_ptr<Surface> surface;
-
   // Threading: We want to use the platform view on the non-platform thread.
   // Using the weak pointer is illegal. But, we are going to introduce a latch
   // so that the platform view is not collected till the surface is obtained.
@@ -117,8 +107,9 @@ void PlatformView::UpdateSemantics(SemanticsNodeUpdates update,
 
 void PlatformView::HandlePlatformMessage(
     std::unique_ptr<PlatformMessage> message) {
-  if (auto response = message->response())
+  if (auto response = message->response()) {
     response->CompleteEmpty();
+  }
 }
 
 void PlatformView::OnPreEngineRestart() const {}
@@ -181,6 +172,16 @@ void PlatformView::UpdateAssetResolverByType(
     std::unique_ptr<AssetResolver> updated_asset_resolver,
     AssetResolver::AssetResolverType type) {
   delegate_.UpdateAssetResolverByType(std::move(updated_asset_resolver), type);
+}
+
+std::unique_ptr<SnapshotSurfaceProducer>
+PlatformView::CreateSnapshotSurfaceProducer() {
+  return nullptr;
+}
+
+std::shared_ptr<PlatformMessageHandler>
+PlatformView::GetPlatformMessageHandler() const {
+  return nullptr;
 }
 
 }  // namespace flutter

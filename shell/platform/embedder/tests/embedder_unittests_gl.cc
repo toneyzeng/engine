@@ -28,14 +28,27 @@
 #include "flutter/shell/platform/embedder/tests/embedder_test_context_gl.h"
 #include "flutter/shell/platform/embedder/tests/embedder_unittests_util.h"
 #include "flutter/testing/assertions_skia.h"
+#include "flutter/testing/test_gl_surface.h"
+#include "flutter/testing/test_vulkan_context.h"
 #include "flutter/testing/testing.h"
 #include "third_party/skia/include/core/SkSurface.h"
+#include "third_party/skia/src/gpu/gl/GrGLDefines.h"
 #include "third_party/tonic/converter/dart_converter.h"
 
 namespace flutter {
 namespace testing {
 
 using EmbedderTest = testing::EmbedderTest;
+
+//------------------------------------------------------------------------------
+/// This is a sanity check to ensure Swiftshader Vulkan is working. Once Vulkan
+/// support lands in the embedder API, it'll be tested via a new
+/// EmbedderTestContext type/config.
+///
+TEST_F(EmbedderTest, CanInitializeTestVulkanContext) {
+  TestVulkanContext ctx;
+  ASSERT_TRUE(ctx.IsValid());
+}
 
 TEST_F(EmbedderTest, CanCreateOpenGLRenderingEngine) {
   EmbedderConfigBuilder builder(
@@ -2016,7 +2029,8 @@ TEST_F(EmbedderTest,
 
   constexpr size_t frames_expected = 10;
   fml::CountDownLatch frame_latch(frames_expected);
-  size_t frames_seen = 0;
+  static size_t frames_seen;
+  frames_seen = 0;
   context.AddNativeCallback("SignalNativeTest",
                             CREATE_NATIVE_ENTRY([&](Dart_NativeArguments args) {
                               frames_seen++;
@@ -2025,6 +2039,8 @@ TEST_F(EmbedderTest,
   frame_latch.Wait();
 
   ASSERT_EQ(frames_expected, frames_seen);
+
+  FlutterEngineShutdown(engine.release());
 }
 
 TEST_F(EmbedderTest,
@@ -2054,7 +2070,8 @@ TEST_F(EmbedderTest,
 
   constexpr size_t frames_expected = 10;
   fml::CountDownLatch frame_latch(frames_expected);
-  size_t frames_seen = 0;
+  static size_t frames_seen;
+  frames_seen = 0;
   context.AddNativeCallback("SignalNativeTest",
                             CREATE_NATIVE_ENTRY([&](Dart_NativeArguments args) {
                               frames_seen++;
@@ -2063,6 +2080,8 @@ TEST_F(EmbedderTest,
   frame_latch.Wait();
 
   ASSERT_EQ(frames_expected, frames_seen);
+
+  FlutterEngineShutdown(engine.release());
 }
 
 TEST_F(EmbedderTest, PlatformViewMutatorsAreValid) {
@@ -2441,8 +2460,8 @@ TEST_F(EmbedderTest, ArcEndCapsAreDrawnCorrectly) {
 
   FlutterWindowMetricsEvent event = {};
   event.struct_size = sizeof(event);
-  event.width = 1024;
-  event.height = 800;
+  event.width = 800;
+  event.height = 1024;
   event.pixel_ratio = 1.0;
   ASSERT_EQ(FlutterEngineSendWindowMetricsEvent(engine.get(), &event),
             kSuccess);
@@ -3529,7 +3548,9 @@ TEST_F(EmbedderTest, CreateInvalidBackingstoreOpenGLTexture) {
         backing_store_out->open_gl.texture.target = 0;
         backing_store_out->open_gl.texture.name = 0;
         backing_store_out->open_gl.texture.format = 0;
-        backing_store_out->open_gl.texture.user_data = new TestCollectOnce();
+        static TestCollectOnce collect_once_user_data;
+        collect_once_user_data = {};
+        backing_store_out->open_gl.texture.user_data = &collect_once_user_data;
         backing_store_out->open_gl.texture.destruction_callback =
             [](void* user_data) {
               reinterpret_cast<TestCollectOnce*>(user_data)->Collect();
@@ -3589,8 +3610,10 @@ TEST_F(EmbedderTest, CreateInvalidBackingstoreOpenGLFramebuffer) {
         backing_store_out->open_gl.type = kFlutterOpenGLTargetTypeFramebuffer;
         backing_store_out->open_gl.framebuffer.target = 0;
         backing_store_out->open_gl.framebuffer.name = 0;
+        static TestCollectOnce collect_once_user_data;
+        collect_once_user_data = {};
         backing_store_out->open_gl.framebuffer.user_data =
-            new TestCollectOnce();
+            &collect_once_user_data;
         backing_store_out->open_gl.framebuffer.destruction_callback =
             [](void* user_data) {
               reinterpret_cast<TestCollectOnce*>(user_data)->Collect();
@@ -3615,6 +3638,57 @@ TEST_F(EmbedderTest, CreateInvalidBackingstoreOpenGLFramebuffer) {
             kSuccess);
   ASSERT_TRUE(engine.is_valid());
   latch.Wait();
+}
+
+TEST_F(EmbedderTest, ExternalTextureGLRefreshedTooOften) {
+  TestGLSurface surface(SkISize::Make(100, 100));
+  auto context = surface.GetGrContext();
+
+  typedef void (*glGenTexturesProc)(uint32_t n, uint32_t * textures);
+  glGenTexturesProc glGenTextures;
+
+  glGenTextures = reinterpret_cast<glGenTexturesProc>(
+      surface.GetProcAddress("glGenTextures"));
+
+  uint32_t name;
+  glGenTextures(1, &name);
+
+  bool resolve_called = false;
+
+  EmbedderExternalTextureGL::ExternalTextureCallback callback(
+      [&](int64_t, size_t, size_t) {
+        resolve_called = true;
+        auto res = std::make_unique<FlutterOpenGLTexture>();
+        res->target = GR_GL_TEXTURE_2D;
+        res->name = name;
+        res->format = GR_GL_RGBA8;
+        res->user_data = nullptr;
+        res->destruction_callback = [](void*) {};
+        res->width = res->height = 100;
+        return res;
+      });
+  EmbedderExternalTextureGL texture(1, callback);
+
+  auto skia_surface = surface.GetOnscreenSurface();
+  auto canvas = skia_surface->getCanvas();
+
+  Texture* texture_ = &texture;
+  texture_->Paint(*canvas, SkRect::MakeXYWH(0, 0, 100, 100), false,
+                  context.get(), SkSamplingOptions(SkFilterMode::kLinear));
+
+  EXPECT_TRUE(resolve_called);
+  resolve_called = false;
+
+  texture_->Paint(*canvas, SkRect::MakeXYWH(0, 0, 100, 100), false,
+                  context.get(), SkSamplingOptions(SkFilterMode::kLinear));
+
+  EXPECT_FALSE(resolve_called);
+
+  texture_->MarkNewFrameAvailable();
+  texture_->Paint(*canvas, SkRect::MakeXYWH(0, 0, 100, 100), false,
+                  context.get(), SkSamplingOptions(SkFilterMode::kLinear));
+
+  EXPECT_TRUE(resolve_called);
 }
 
 }  // namespace testing

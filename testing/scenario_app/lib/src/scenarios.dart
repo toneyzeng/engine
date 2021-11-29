@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.6
 import 'dart:ui';
 
 import 'animated_color_square.dart';
@@ -34,6 +33,8 @@ Map<String, ScenarioFactory> _scenarios = <String, ScenarioFactory>{
   'platform_view_clippath': () => PlatformViewClipPathScenario(PlatformDispatcher.instance, 'PlatformViewClipPath', id: _viewId++),
   'platform_view_transform': () => PlatformViewTransformScenario(PlatformDispatcher.instance, 'PlatformViewTransform', id: _viewId++),
   'platform_view_opacity': () => PlatformViewOpacityScenario(PlatformDispatcher.instance, 'PlatformViewOpacity', id: _viewId++),
+  'platform_view_with_other_backdrop_filter': () => PlatformViewWithOtherBackDropFilter(PlatformDispatcher.instance, 'PlatformViewWithOtherBackDropFilter', id: _viewId++),
+  'two_platform_views_with_other_backdrop_filter': () => TwoPlatformViewsWithOtherBackDropFilter(PlatformDispatcher.instance, firstId: _viewId++, secondId: _viewId++),
   'platform_view_multiple': () => MultiPlatformViewScenario(PlatformDispatcher.instance, firstId: 6, secondId: _viewId++),
   'platform_view_multiple_background_foreground': () => MultiPlatformViewBackgroundForegroundScenario(PlatformDispatcher.instance, firstId: _viewId++, secondId: _viewId++),
   'non_full_screen_flutter_view_platform_view': () => NonFullScreenFlutterViewPlatformViewScenario(PlatformDispatcher.instance, 'Hello from Scenarios (Platform View)', id: _viewId++),
@@ -48,11 +49,12 @@ Map<String, ScenarioFactory> _scenarios = <String, ScenarioFactory>{
   'platform_view_with_continuous_texture': () => PlatformViewWithContinuousTexture(PlatformDispatcher.instance, 'Platform View', id: _viewId++),
   'bogus_font_text': () => BogusFontText(PlatformDispatcher.instance),
   'spawn_engine_works' : () => BogusFontText(PlatformDispatcher.instance),
+  'pointer_events': () => TouchesScenario(PlatformDispatcher.instance),
 };
 
 Map<String, dynamic> _currentScenarioParams = <String, dynamic>{};
 
-Scenario _currentScenarioInstance;
+Scenario? _currentScenarioInstance;
 
 /// Loads an scenario.
 /// The map must contain a `name` entry, which equals to the name of the scenario.
@@ -62,16 +64,16 @@ void loadScenario(Map<String, dynamic> scenario) {
   _currentScenarioParams = scenario;
 
   if (_currentScenarioInstance != null) {
-    _currentScenarioInstance.unmount();
+    _currentScenarioInstance!.unmount();
   }
 
-  _currentScenarioInstance = _scenarios[scenario['name']]();
+  _currentScenarioInstance = _scenarios[scenario['name']]!();
   window.scheduleFrame();
   print('Loading scenario $scenarioName');
 }
 
 /// Gets the loaded [Scenario].
-Scenario get currentScenario {
+Scenario? get currentScenario {
   return _currentScenarioInstance;
 }
 

@@ -38,6 +38,7 @@ import io.flutter.embedding.engine.systemchannels.TextInputChannel;
 import io.flutter.plugin.localization.LocalizationPlugin;
 import io.flutter.plugin.platform.PlatformViewsController;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -133,7 +134,7 @@ public class FlutterEngine {
    *
    * <p>A new {@code FlutterEngine} will not display any UI until a {@link RenderSurface} is
    * registered. See {@link #getRenderer()} and {@link
-   * FlutterRenderer#startRenderingToSurface(RenderSurface)}.
+   * FlutterRenderer#startRenderingToSurface(Surface)}.
    *
    * <p>A new {@code FlutterEngine} automatically attaches all plugins. See {@link #getPlugins()}.
    *
@@ -144,9 +145,10 @@ public class FlutterEngine {
    *
    * <p>In order to pass Dart VM initialization arguments (see {@link
    * io.flutter.embedding.engine.FlutterShellArgs}) when creating the VM, manually set the
-   * initialization arguments by calling {@link FlutterLoader#startInitialization(Context)} and
-   * {@link FlutterLoader#ensureInitializationComplete(Context, String[])} before constructing the
-   * engine.
+   * initialization arguments by calling {@link
+   * io.flutter.embedding.engine.loader.FlutterLoader#startInitialization(Context)} and {@link
+   * io.flutter.embedding.engine.loader.FlutterLoader#ensureInitializationComplete(Context,
+   * String[])} before constructing the engine.
    */
   public FlutterEngine(@NonNull Context context) {
     this(context, null);
@@ -213,8 +215,8 @@ public class FlutterEngine {
   }
 
   /**
-   * Same as {@link #FlutterEngine(Context, FlutterLoader, FlutterJNI, String[])} but with no Dart
-   * VM flags.
+   * Same as {@link #FlutterEngine(Context, FlutterLoader, FlutterJNI, String[], boolean)} but with
+   * no Dart VM flags and automatically registers plugins.
    *
    * <p>{@code flutterJNI} should be a new instance that has never been attached to an engine
    * before.
@@ -356,8 +358,7 @@ public class FlutterEngine {
 
   private void attachToJni() {
     Log.v(TAG, "Attaching to JNI.");
-    // TODO(mattcarroll): update native call to not take in "isBackgroundView"
-    flutterJNI.attachToNative(false);
+    flutterJNI.attachToNative();
 
     if (!isAttachedToJni()) {
       throw new RuntimeException("FlutterEngine failed to attach to its native Object reference.");
@@ -370,20 +371,27 @@ public class FlutterEngine {
   }
 
   /**
-   * Create a second {@link FlutterEngine} based on this current one by sharing as much resources
-   * together as possible to minimize startup latency and memory cost.
+   * Create a second {@link io.flutter.embedding.engine.FlutterEngine} based on this current one by
+   * sharing as much resources together as possible to minimize startup latency and memory cost.
    *
-   * @param context is a Context used to create the {@link FlutterEngine}. Could be the same Context
-   *     as the current engine or a different one. Generally, only an application Context is needed
-   *     for the {@link FlutterEngine} and its dependencies.
+   * @param context is a Context used to create the {@link
+   *     io.flutter.embedding.engine.FlutterEngine}. Could be the same Context as the current engine
+   *     or a different one. Generally, only an application Context is needed for the {@link
+   *     io.flutter.embedding.engine.FlutterEngine} and its dependencies.
    * @param dartEntrypoint specifies the {@link DartEntrypoint} the new engine should run. It
    *     doesn't need to be the same entrypoint as the current engine but must be built in the same
    *     AOT or snapshot.
-   * @return a new {@link FlutterEngine}.
+   * @param initialRoute The name of the initial Flutter `Navigator` `Route` to load. If this is
+   *     null, it will default to the "/" route.
+   * @param dartEntrypointArgs Arguments passed as a list of string to Dart's entrypoint function.
+   * @return a new {@link io.flutter.embedding.engine.FlutterEngine}.
    */
   @NonNull
   /*package*/ FlutterEngine spawn(
-      @NonNull Context context, @NonNull DartEntrypoint dartEntrypoint) {
+      @NonNull Context context,
+      @NonNull DartEntrypoint dartEntrypoint,
+      @Nullable String initialRoute,
+      @Nullable List<String> dartEntrypointArgs) {
     if (!isAttachedToJni()) {
       throw new IllegalStateException(
           "Spawn can only be called on a fully constructed FlutterEngine");
@@ -391,7 +399,10 @@ public class FlutterEngine {
 
     FlutterJNI newFlutterJNI =
         flutterJNI.spawn(
-            dartEntrypoint.dartEntrypointFunctionName, dartEntrypoint.dartEntrypointLibrary);
+            dartEntrypoint.dartEntrypointFunctionName,
+            dartEntrypoint.dartEntrypointLibrary,
+            initialRoute,
+            dartEntrypointArgs);
     return new FlutterEngine(
         context, // Context.
         null, // FlutterLoader. A null value passed here causes the constructor to get it from the

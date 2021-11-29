@@ -137,8 +137,10 @@ bool VulkanSurfaceProducer::Initialize(scenic::Session* scenic_session) {
                      backend_context.fPhysicalDevice, 0, nullptr,
                      countof(device_extensions), device_extensions);
   backend_context.fVkExtensions = &vk_extensions;
+  GrContextOptions options;
+  options.fReduceOpsTaskSplitting = GrContextOptions::Enable::kNo;
 
-  context_ = GrDirectContext::MakeVulkan(backend_context);
+  context_ = GrDirectContext::MakeVulkan(backend_context, options);
 
   if (context_ == nullptr) {
     FML_LOG(ERROR)
@@ -155,9 +157,9 @@ bool VulkanSurfaceProducer::Initialize(scenic::Session* scenic_session) {
   return true;
 }
 
-void VulkanSurfaceProducer::OnSurfacesPresented(
+void VulkanSurfaceProducer::SubmitSurfaces(
     std::vector<std::unique_ptr<SurfaceProducerSurface>> surfaces) {
-  TRACE_EVENT0("flutter", "VulkanSurfaceProducer::OnSurfacesPresented");
+  TRACE_EVENT0("flutter", "VulkanSurfaceProducer::SubmitSurfaces");
 
   // Do a single flush for all canvases derived from the context.
   {

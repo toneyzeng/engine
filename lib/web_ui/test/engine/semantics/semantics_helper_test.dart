@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.12
 import 'dart:html' as html;
 
 import 'package:test/bootstrap/browser.dart';
 import 'package:test/test.dart';
-import 'package:ui/src/engine.dart';
+import 'package:ui/src/engine/browser_detection.dart';
+import 'package:ui/src/engine/pointer_binding.dart';
+import 'package:ui/src/engine/semantics.dart';
 
 const PointerSupportDetector _defaultSupportDetector = PointerSupportDetector();
 
@@ -34,9 +35,9 @@ void testMain() {
       EngineSemanticsOwner.instance.semanticsEnabled = false;
     });
 
-    test('prepare accesibility placeholder', () async {
+    test('prepare accessibility placeholder', () async {
       expect(_placeholder!.getAttribute('role'), 'button');
-      expect(_placeholder!.getAttribute('aria-live'), 'true');
+      expect(_placeholder!.getAttribute('aria-live'), 'polite');
       expect(_placeholder!.getAttribute('tabindex'), '0');
 
       html.document.body!.append(_placeholder!);
@@ -58,7 +59,7 @@ void testMain() {
       bool shouldForwardToFramework =
           desktopSemanticsEnabler.tryEnableSemantics(event);
 
-      expect(shouldForwardToFramework, true);
+      expect(shouldForwardToFramework, isTrue);
 
       // Pointer events are not defined in webkit.
       if (browserEngine != BrowserEngine.webkit) {
@@ -66,20 +67,20 @@ void testMain() {
         shouldForwardToFramework =
             desktopSemanticsEnabler.tryEnableSemantics(event);
 
-        expect(shouldForwardToFramework, true);
+        expect(shouldForwardToFramework, isTrue);
       }
     });
 
     test(
-        'Relevants events targeting placeholder should not be forwarded to the framework',
+        'Relevant events targeting placeholder should not be forwarded to the framework',
         () async {
-      html.Event event = html.MouseEvent('mousedown');
+      final html.Event event = html.MouseEvent('mousedown');
       _placeholder!.dispatchEvent(event);
 
-      bool shouldForwardToFramework =
+      final bool shouldForwardToFramework =
           desktopSemanticsEnabler.tryEnableSemantics(event);
 
-      expect(shouldForwardToFramework, false);
+      expect(shouldForwardToFramework, isFalse);
     });
 
     test('disposes of the placeholder', () {
@@ -109,15 +110,15 @@ void testMain() {
         EngineSemanticsOwner.instance.semanticsEnabled = false;
       });
 
-      test('prepare accesibility placeholder', () async {
+      test('prepare accessibility placeholder', () async {
         expect(_placeholder!.getAttribute('role'), 'button');
 
         // Placeholder should cover all the screen on a mobile device.
         final num bodyHeight = html.window.innerHeight!;
-        final num bodyWidht = html.window.innerWidth!;
+        final num bodyWidth = html.window.innerWidth!;
 
         expect(_placeholder!.getBoundingClientRect().height, bodyHeight);
-        expect(_placeholder!.getBoundingClientRect().width, bodyWidht);
+        expect(_placeholder!.getBoundingClientRect().width, bodyWidth);
       });
 
       test('Non-relevant events should be forwarded to the framework',
@@ -131,10 +132,10 @@ void testMain() {
           event = html.MouseEvent('mousemove');
         }
 
-        bool shouldForwardToFramework =
+        final bool shouldForwardToFramework =
             mobileSemanticsEnabler.tryEnableSemantics(event);
 
-        expect(shouldForwardToFramework, true);
+        expect(shouldForwardToFramework, isTrue);
       });
 
       test('Enables semantics when receiving a relevant event', () {

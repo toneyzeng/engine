@@ -12,8 +12,6 @@ namespace flutter {
 OpacityLayer::OpacityLayer(SkAlpha alpha, const SkPoint& offset)
     : alpha_(alpha), offset_(offset) {}
 
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
-
 void OpacityLayer::Diff(DiffContext* context, const Layer* old_layer) {
   DiffContext::AutoSubtreeRestore subtree(context);
   auto* prev = static_cast<const OpacityLayer*>(old_layer);
@@ -24,11 +22,13 @@ void OpacityLayer::Diff(DiffContext* context, const Layer* old_layer) {
     }
   }
   context->PushTransform(SkMatrix::Translate(offset_.fX, offset_.fY));
+#ifndef SUPPORT_FRACTIONAL_TRANSLATION
+  context->SetTransform(
+      RasterCache::GetIntegralTransCTM(context->GetTransform()));
+#endif
   DiffChildren(context, prev);
   context->SetLayerPaintRegion(this, context->CurrentSubtreeRegion());
 }
-
-#endif  // FLUTTER_ENABLE_DIFF_CONTEXT
 
 void OpacityLayer::Preroll(PrerollContext* context, const SkMatrix& matrix) {
   TRACE_EVENT0("flutter", "OpacityLayer::Preroll");
@@ -100,16 +100,5 @@ void OpacityLayer::Paint(PaintContext& context) const {
       Layer::AutoSaveLayer::Create(context, saveLayerBounds, &paint);
   PaintChildren(context);
 }
-
-#if defined(LEGACY_FUCHSIA_EMBEDDER)
-
-void OpacityLayer::UpdateScene(std::shared_ptr<SceneUpdateContext> context) {
-  float saved_alpha = context->alphaf();
-  context->set_alphaf(context->alphaf() * (alpha_ / 255.f));
-  ContainerLayer::UpdateScene(context);
-  context->set_alphaf(saved_alpha);
-}
-
-#endif
 
 }  // namespace flutter

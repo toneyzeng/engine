@@ -26,8 +26,6 @@ TransformLayer::TransformLayer(const SkMatrix& transform)
   }
 }
 
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
-
 void TransformLayer::Diff(DiffContext* context, const Layer* old_layer) {
   DiffContext::AutoSubtreeRestore subtree(context);
   auto* prev = static_cast<const TransformLayer*>(old_layer);
@@ -41,8 +39,6 @@ void TransformLayer::Diff(DiffContext* context, const Layer* old_layer) {
   DiffChildren(context, prev);
   context->SetLayerPaintRegion(this, context->CurrentSubtreeRegion());
 }
-
-#endif  // FLUTTER_ENABLE_DIFF_CONTEXT
 
 void TransformLayer::Preroll(PrerollContext* context, const SkMatrix& matrix) {
   TRACE_EVENT0("flutter", "TransformLayer::Preroll");
@@ -69,22 +65,6 @@ void TransformLayer::Preroll(PrerollContext* context, const SkMatrix& matrix) {
   context->cull_rect = previous_cull_rect;
   context->mutators_stack.Pop();
 }
-
-#if defined(LEGACY_FUCHSIA_EMBEDDER)
-
-void TransformLayer::UpdateScene(std::shared_ptr<SceneUpdateContext> context) {
-  TRACE_EVENT0("flutter", "TransformLayer::UpdateScene");
-  FML_DCHECK(needs_system_composite());
-
-  std::optional<SceneUpdateContext::Transform> transform;
-  if (!transform_.isIdentity()) {
-    transform.emplace(context, transform_);
-  }
-
-  UpdateSceneChildren(context);
-}
-
-#endif
 
 void TransformLayer::Paint(PaintContext& context) const {
   TRACE_EVENT0("flutter", "TransformLayer::Paint");

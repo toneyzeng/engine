@@ -13,7 +13,6 @@
 #include "flutter/fml/macros.h"
 #include "flutter/fml/mapping.h"
 #include "flutter/fml/memory/weak_ptr.h"
-#include "flutter/lib/ui/hint_freed_delegate.h"
 #include "flutter/lib/ui/painting/image_decoder.h"
 #include "flutter/lib/ui/painting/image_generator_registry.h"
 #include "flutter/lib/ui/semantics/custom_accessibility_action.h"
@@ -73,9 +72,7 @@ namespace flutter {
 ///           name and it does happen to be one of the older classes in the
 ///           repository.
 ///
-class Engine final : public RuntimeDelegate,
-                     public HintFreedDelegate,
-                     PointerDataDispatcher::Delegate {
+class Engine final : public RuntimeDelegate, PointerDataDispatcher::Delegate {
  public:
   //----------------------------------------------------------------------------
   /// @brief      Indicates the result of the call to `Engine::Run`.
@@ -378,7 +375,8 @@ class Engine final : public RuntimeDelegate,
       Delegate& delegate,
       const PointerDataDispatcherMaker& dispatcher_maker,
       Settings settings,
-      std::unique_ptr<Animator> animator) const;
+      std::unique_ptr<Animator> animator,
+      const std::string& initial_route) const;
 
   //----------------------------------------------------------------------------
   /// @brief      Destroys the engine engine. Called by the shell on the UI task
@@ -503,10 +501,11 @@ class Engine final : public RuntimeDelegate,
   ///                         began. May be used by animation interpolators,
   ///                         physics simulations, etc..
   ///
-  void BeginFrame(fml::TimePoint frame_time);
-
-  // |HintFreedDelegate|
-  void HintFreed(size_t size) override;
+  /// @param[in]  frame_number The frame number recorded by the animator. Used
+  ///                          by the framework to associate frame specific
+  ///                          debug information with frame timings and timeline
+  ///                          events.
+  void BeginFrame(fml::TimePoint frame_time, uint64_t frame_number);
 
   //----------------------------------------------------------------------------
   /// @brief      Notifies the engine that the UI task runner is not expected to
@@ -737,21 +736,6 @@ class Engine final : public RuntimeDelegate,
                                  uint64_t trace_flow_id);
 
   //----------------------------------------------------------------------------
-  /// @brief      Notifies the engine that the embedder has sent it a key data
-  ///             packet. A key data packet contains one key event. This call
-  ///             originates in the platform view and the shell has forwarded
-  ///             the same to the engine on the UI task runner here. The engine
-  ///             will decide whether to handle this event, and send the
-  ///             result using `callback`, which will be called exactly once.
-  ///
-  /// @param[in]  packet    The key data packet.
-  /// @param[in]  callback  Called when the framework has decided whether
-  ///                       to handle this key data.
-  ///
-  void DispatchKeyDataPacket(std::unique_ptr<KeyDataPacket> packet,
-                             KeyDataResponse callback);
-
-  //----------------------------------------------------------------------------
   /// @brief      Notifies the engine that the embedder encountered an
   ///             accessibility related action on the specified node. This call
   ///             originates on the platform view and has been forwarded to the
@@ -807,6 +791,14 @@ class Engine final : public RuntimeDelegate,
   // Return the asset manager associated with the current engine, or nullptr.
   std::shared_ptr<AssetManager> GetAssetManager();
 
+  //----------------------------------------------------------------------------
+  /// @brief      Get the `ImageGeneratorRegistry` associated with the current
+  ///             engine.
+  ///
+  /// @return     The engine's `ImageGeneratorRegistry`.
+  ///
+  fml::WeakPtr<ImageGeneratorRegistry> GetImageGeneratorRegistry();
+
   // |PointerDataDispatcher::Delegate|
   void DoDispatchPacket(std::unique_ptr<PointerDataPacket> packet,
                         uint64_t trace_flow_id) override;
@@ -826,6 +818,13 @@ class Engine final : public RuntimeDelegate,
   ///             RunConfiguration when |Engine::Run| was called.
   ///
   const std::string& GetLastEntrypointLibrary() const;
+
+  //----------------------------------------------------------------------------
+  /// @brief      Get the last Entrypoint Arguments that was used in the
+  ///             RunConfiguration when |Engine::Run| was called.This is only
+  ///             valid in debug mode.
+  ///
+  const std::vector<std::string>& GetLastEntrypointArgs() const;
 
   //----------------------------------------------------------------------------
   /// @brief      Getter for the initial route.  This can be set with a platform
@@ -903,31 +902,6 @@ class Engine final : public RuntimeDelegate,
   }
 
  private:
-  Engine::Delegate& delegate_;
-  const Settings settings_;
-  std::unique_ptr<Animator> animator_;
-  std::unique_ptr<RuntimeController> runtime_controller_;
-
-  // The pointer_data_dispatcher_ depends on animator_ and runtime_controller_.
-  // So it should be defined after them to ensure that pointer_data_dispatcher_
-  // is destructed first.
-  std::unique_ptr<PointerDataDispatcher> pointer_data_dispatcher_;
-
-  std::string last_entry_point_;
-  std::string last_entry_point_library_;
-  std::string initial_route_;
-  ViewportMetrics viewport_metrics_;
-  std::shared_ptr<AssetManager> asset_manager_;
-  bool activity_running_;
-  bool have_surface_;
-  std::shared_ptr<FontCollection> font_collection_;
-  ImageDecoder image_decoder_;
-  ImageGeneratorRegistry image_generator_registry_;
-  TaskRunners task_runners_;
-  size_t hint_freed_bytes_since_last_call_ = 0;
-  fml::TimePoint last_hint_freed_call_time_;
-  fml::WeakPtrFactory<Engine> weak_factory_;
-
   // |RuntimeDelegate|
   std::string DefaultRouteName() override;
 
@@ -976,6 +950,29 @@ class Engine final : public RuntimeDelegate,
 
   friend class testing::ShellTest;
 
+  Engine::Delegate& delegate_;
+  const Settings settings_;
+  std::unique_ptr<Animator> animator_;
+  std::unique_ptr<RuntimeController> runtime_controller_;
+
+  // The pointer_data_dispatcher_ depends on animator_ and runtime_controller_.
+  // So it should be defined after them to ensure that pointer_data_dispatcher_
+  // is destructed first.
+  std::unique_ptr<PointerDataDispatcher> pointer_data_dispatcher_;
+
+  std::string last_entry_point_;
+  std::string last_entry_point_library_;
+  std::vector<std::string> last_entry_point_args_;
+  std::string initial_route_;
+  ViewportMetrics viewport_metrics_;
+  std::shared_ptr<AssetManager> asset_manager_;
+  bool activity_running_;
+  bool have_surface_;
+  std::shared_ptr<FontCollection> font_collection_;
+  ImageDecoder image_decoder_;
+  ImageGeneratorRegistry image_generator_registry_;
+  TaskRunners task_runners_;
+  fml::WeakPtrFactory<Engine> weak_factory_;  // Must be the last member.
   FML_DISALLOW_COPY_AND_ASSIGN(Engine);
 };
 

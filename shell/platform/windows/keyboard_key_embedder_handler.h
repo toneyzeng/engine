@@ -15,18 +15,28 @@
 
 namespace flutter {
 
-namespace {}  // namespace
+// Encode a 32-bit unicode code point into a UTF-8 byte array.
+//
+// See https://en.wikipedia.org/wiki/UTF-8#Encoding for the algorithm.
+std::string ConvertChar32ToUtf8(char32_t ch);
 
 // A delegate of |KeyboardKeyHandler| that handles events by sending
 // converted |FlutterKeyEvent|s through the embedder API.
 //
 // This class communicates with the HardwareKeyboard API in the framework.
+//
+// Every key event must result in at least one FlutterKeyEvent, even an empty
+// one (both logical and physical IDs are 0). This ensures that raw key
+// messages are always preceded by key data so that the transit mode is
+// correctly inferred. (Technically only the first key event needs so, but for
+// simplicity.)
 class KeyboardKeyEmbedderHandler
     : public KeyboardKeyHandler::KeyboardKeyHandlerDelegate {
  public:
-  using SendEvent = std::function<void(const FlutterKeyEvent& /* event */,
-                                       FlutterKeyEventCallback /* callback */,
-                                       void* /* user_data */)>;
+  using SendEventHandler =
+      std::function<void(const FlutterKeyEvent& /* event */,
+                         FlutterKeyEventCallback /* callback */,
+                         void* /* user_data */)>;
   using GetKeyStateHandler = std::function<SHORT(int /* nVirtKey */)>;
 
   // Build a KeyboardKeyEmbedderHandler.
@@ -34,12 +44,12 @@ class KeyboardKeyEmbedderHandler
   // Use `send_event` to define how the class should dispatch converted
   // flutter events, as well as how to receive the response, to the engine. It's
   // typically FlutterWindowsEngine::SendKeyEvent. The 2nd and 3rd parameter
-  // of the SendEvent call might be nullptr.
+  // of the SendEventHandler call might be nullptr.
   //
   // Use `get_key_state` to define how the class should get a reliable result of
   // the state for a virtual key. It's typically Win32's GetKeyState, but can
   // also be nullptr (for UWP).
-  explicit KeyboardKeyEmbedderHandler(SendEvent send_event,
+  explicit KeyboardKeyEmbedderHandler(SendEventHandler send_event,
                                       GetKeyStateHandler get_key_state);
 
   virtual ~KeyboardKeyEmbedderHandler();
@@ -79,6 +89,16 @@ class KeyboardKeyEmbedderHandler
     bool toggled_on;
   };
 
+  // Implements the core logic of |KeyboardHook|, leaving out some state
+  // guards.
+  void KeyboardHookImpl(int key,
+                        int scancode,
+                        int action,
+                        char32_t character,
+                        bool extended,
+                        bool was_down,
+                        std::function<void(bool)> callback);
+
   // Assign |critical_keys_| with basic information.
   void InitCriticalKeys();
   // Update |critical_keys_| with last seen logical and physical key.
@@ -87,13 +107,19 @@ class KeyboardKeyEmbedderHandler
                                 uint64_t logical_key);
   // Check each key's state from |get_key_state_| and synthesize events
   // if their toggling states have been desynchronized.
-  void SynchronizeCritialToggledStates(int this_virtual_key);
+  void SynchronizeCritialToggledStates(int virtual_key, bool is_down);
   // Check each key's state from |get_key_state_| and synthesize events
   // if their pressing states have been desynchronized.
-  void SynchronizeCritialPressedStates();
+  void SynchronizeCritialPressedStates(int virtual_key, bool was_down);
+
+  // Wraps perform_send_event_ with state tracking. Use this instead of
+  // |perform_send_event_| to send events to the framework.
+  void SendEvent(const FlutterKeyEvent& event,
+                 FlutterKeyEventCallback callback,
+                 void* user_data);
 
   std::function<void(const FlutterKeyEvent&, FlutterKeyEventCallback, void*)>
-      sendEvent_;
+      perform_send_event_;
   GetKeyStateHandler get_key_state_;
 
   // A map from physical keys to logical keys, each entry indicating a pressed
@@ -105,6 +131,9 @@ class KeyboardKeyEmbedderHandler
   // A self-incrementing integer, used as the ID for the next entry for
   // |pending_responses_|.
   uint64_t response_id_;
+  // Whether any events has been sent with |PerformSendEvent| during a
+  // |KeyboardHook|.
+  bool sent_any_events;
 
   // Important keys whose states are checked and guaranteed synchronized
   // on every key event.
@@ -113,18 +142,28 @@ class KeyboardKeyEmbedderHandler
   // key they're last seen.
   std::map<UINT, CriticalKey> critical_keys_;
 
-  static uint64_t getPhysicalKey(int scancode, bool extended);
-  static uint64_t getLogicalKey(int key, bool extended, int scancode);
+  static uint64_t GetPhysicalKey(int scancode, bool extended);
+  static uint64_t GetLogicalKey(int key, bool extended, int scancode);
   static void HandleResponse(bool handled, void* user_data);
   static void ConvertUtf32ToUtf8_(char* out, char32_t ch);
   static FlutterKeyEvent SynthesizeSimpleEvent(FlutterKeyEventType type,
                                                uint64_t physical,
                                                uint64_t logical,
                                                const char* character);
+  static uint64_t ApplyPlaneToId(uint64_t id, uint64_t plane);
 
   static std::map<uint64_t, uint64_t> windowsToPhysicalMap_;
   static std::map<uint64_t, uint64_t> windowsToLogicalMap_;
   static std::map<uint64_t, uint64_t> scanCodeToLogicalMap_;
+
+  // Mask for the 32-bit value portion of the key code.
+  static const uint64_t valueMask;
+
+  // The plane value for keys which have a Unicode representation.
+  static const uint64_t unicodePlane;
+
+  // The plane value for the private keys defined by the GTK embedding.
+  static const uint64_t windowsPlane;
 };
 
 }  // namespace flutter

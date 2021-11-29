@@ -23,7 +23,8 @@ LayerTree::LayerTree(const SkISize& frame_size, float device_pixel_ratio)
 }
 
 bool LayerTree::Preroll(CompositorContext::ScopedFrame& frame,
-                        bool ignore_raster_cache) {
+                        bool ignore_raster_cache,
+                        SkRect cull_rect) {
   TRACE_EVENT0("flutter", "LayerTree::Preroll");
 
   if (!root_layer_) {
@@ -42,7 +43,7 @@ bool LayerTree::Preroll(CompositorContext::ScopedFrame& frame,
       frame.view_embedder(),
       stack,
       color_space,
-      kGiantRect,
+      cull_rect,
       false,
       frame.context().raster_time(),
       frame.context().ui_time(),
@@ -53,27 +54,6 @@ bool LayerTree::Preroll(CompositorContext::ScopedFrame& frame,
   root_layer_->Preroll(&context, frame.root_surface_transformation());
   return context.surface_needs_readback;
 }
-
-#if defined(LEGACY_FUCHSIA_EMBEDDER)
-void LayerTree::UpdateScene(std::shared_ptr<SceneUpdateContext> context) {
-  TRACE_EVENT0("flutter", "LayerTree::UpdateScene");
-
-  // Reset for a new Scene.
-  context->Reset(frame_size_, device_pixel_ratio_);
-
-  SceneUpdateContext::Frame frame(
-      context,
-      SkRRect::MakeRect(
-          SkRect::MakeWH(frame_size_.width(), frame_size_.height())),
-      SK_ColorTRANSPARENT, SK_AlphaOPAQUE, "flutter::Layer");
-  if (root_layer_->needs_system_composite()) {
-    root_layer_->UpdateScene(context);
-  }
-  if (!root_layer_->is_empty()) {
-    frame.AddPaintLayer(root_layer_.get());
-  }
-}
-#endif
 
 void LayerTree::Paint(CompositorContext::ScopedFrame& frame,
                       bool ignore_raster_cache) const {

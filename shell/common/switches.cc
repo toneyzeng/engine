@@ -43,7 +43,6 @@ struct SwitchDesc {
 static const std::string gAllowedDartFlags[] = {
     "--enable-isolate-groups",
     "--no-enable-isolate-groups",
-    "--no-causal_async_stacks",
     "--lazy_async_stacks",
 };
 // clang-format on
@@ -58,7 +57,6 @@ static const std::string gAllowedDartFlags[] = {
     "--enable-service-port-fallback",
     "--lazy_async_stacks",
     "--max_profile_depth",
-    "--no-causal_async_stacks",
     "--profile_period",
     "--random_seed",
     "--sample-buffer-duration",
@@ -68,6 +66,8 @@ static const std::string gAllowedDartFlags[] = {
     "--write-service-info",
     "--null_assertions",
     "--strict_null_safety_checks",
+    "--enable-display-list",
+    "--no-enable-display-list",
 };
 // clang-format on
 
@@ -200,7 +200,7 @@ static bool GetSwitchValue(const fml::CommandLine& command_line,
 
 std::unique_ptr<fml::Mapping> GetSymbolMapping(std::string symbol_prefix,
                                                std::string native_lib_path) {
-  const uint8_t* mapping;
+  const uint8_t* mapping = nullptr;
   intptr_t size;
 
   auto lookup_symbol = [&mapping, &size, symbol_prefix](
@@ -296,13 +296,23 @@ Settings SettingsFromCommandLine(const fml::CommandLine& command_line) {
   settings.trace_startup =
       command_line.HasOption(FlagForSwitch(Switch::TraceStartup));
 
-  settings.trace_skia =
-      command_line.HasOption(FlagForSwitch(Switch::TraceSkia));
+#if !FLUTTER_RELEASE
+  settings.trace_skia = true;
 
-  std::string trace_skia_allowlist;
-  command_line.GetOptionValue(FlagForSwitch(Switch::TraceSkiaAllowlist),
-                              &trace_skia_allowlist);
-  settings.trace_skia_allowlist = ParseCommaDelimited(trace_skia_allowlist);
+  if (command_line.HasOption(FlagForSwitch(Switch::TraceSkia))) {
+    // If --trace-skia is specified, then log all Skia events.
+    settings.trace_skia_allowlist.reset();
+  } else {
+    std::string trace_skia_allowlist;
+    command_line.GetOptionValue(FlagForSwitch(Switch::TraceSkiaAllowlist),
+                                &trace_skia_allowlist);
+    if (trace_skia_allowlist.size()) {
+      settings.trace_skia_allowlist = ParseCommaDelimited(trace_skia_allowlist);
+    } else {
+      settings.trace_skia_allowlist = {"skia.shaders"};
+    }
+  }
+#endif  // !FLUTTER_RELEASE
 
   std::string trace_allowlist;
   command_line.GetOptionValue(FlagForSwitch(Switch::TraceAllowlist),
@@ -323,6 +333,13 @@ Settings SettingsFromCommandLine(const fml::CommandLine& command_line) {
 
   std::vector<std::string_view> aot_shared_library_name =
       command_line.GetOptionValues(FlagForSwitch(Switch::AotSharedLibraryName));
+
+  std::vector<std::string_view> vmservice_shared_library_name =
+      command_line.GetOptionValues(
+          FlagForSwitch(Switch::AotVMServiceSharedLibraryName));
+  for (auto path : vmservice_shared_library_name) {
+    settings.vmservice_snapshot_library_path.emplace_back(path);
+  }
 
   std::string snapshot_asset_path;
   command_line.GetOptionValue(FlagForSwitch(Switch::SnapshotAssetPath),
@@ -389,6 +406,9 @@ Settings SettingsFromCommandLine(const fml::CommandLine& command_line) {
   settings.enable_skparagraph =
       command_line.HasOption(FlagForSwitch(Switch::EnableSkParagraph));
 
+  settings.prefetched_default_font_manager = command_line.HasOption(
+      FlagForSwitch(Switch::PrefetchedDefaultFontManager));
+
   std::string all_dart_flags;
   if (command_line.GetOptionValue(FlagForSwitch(Switch::DartFlags),
                                   &all_dart_flags)) {
@@ -400,6 +420,16 @@ Settings SettingsFromCommandLine(const fml::CommandLine& command_line) {
       }
       settings.dart_flags.push_back(flag);
     }
+  }
+  if (std::find(settings.dart_flags.begin(), settings.dart_flags.end(),
+                "--enable-display-list") != settings.dart_flags.end()) {
+    FML_LOG(ERROR) << "Manually enabling display lists";
+    settings.enable_display_list = true;
+  } else if (std::find(settings.dart_flags.begin(), settings.dart_flags.end(),
+                       "--no-enable-display-list") !=
+             settings.dart_flags.end()) {
+    FML_LOG(ERROR) << "Manually disabling display lists";
+    settings.enable_display_list = false;
   }
 
 #if !FLUTTER_RELEASE

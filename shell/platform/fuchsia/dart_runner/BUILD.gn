@@ -30,6 +30,8 @@ template("runner") {
       "builtin_libraries.h",
       "dart_component_controller.cc",
       "dart_component_controller.h",
+      "dart_component_controller_v2.cc",
+      "dart_component_controller_v2.h",
       "dart_runner.cc",
       "dart_runner.h",
       "logging.h",
@@ -58,6 +60,7 @@ template("runner") {
              "//flutter/fml",
              "//flutter/shell/platform/fuchsia/dart-pkg/fuchsia",
              "//flutter/shell/platform/fuchsia/dart-pkg/zircon",
+             "$fuchsia_sdk_root/fidl:fuchsia.component.runner",
              "$fuchsia_sdk_root/pkg:async",
              "$fuchsia_sdk_root/pkg:async-cpp",
              "$fuchsia_sdk_root/pkg:async-default",
@@ -141,21 +144,15 @@ template("aot_runner_package") {
         "//flutter/shell/platform/fuchsia/runtime/dart/profiler_symbols:dart_aot_runner",
 
         # TODO(kaushikiska): Figure out how to get the profiler symbols for `libdart_precompiled_runtime`
-        # "//topaz/runtime/dart/profiler_symbols:libdart_precompiled_runtime",
+        # "//third_party/dart/runtime:libdart_precompiled_runtime",
         observatory_target,
       ]
     }
 
     binary = "dart_aot${product_suffix}_runner"
 
-    meta_dir = "//flutter/shell/platform/fuchsia/dart_runner/meta"
-
-    meta = [
-      {
-        path = rebase_path("meta/dart_aot${product_suffix}_runner.cmx")
-        dest = "dart_aot${product_suffix}_runner.cmx"
-      },
-    ]
+    cmx_file = rebase_path("meta/dart_aot${product_suffix}_runner.cmx")
+    cml_file = rebase_path("meta/dart_aot${product_suffix}_runner.cml")
 
     libraries = common_libs
 
@@ -215,7 +212,8 @@ template("jit_runner_package") {
 
     binary = "dart_jit${product_suffix}_runner"
 
-    meta_dir = "//flutter/shell/platform/fuchsia/dart_runner/meta"
+    cmx_file = rebase_path("meta/dart_jit${product_suffix}_runner.cmx")
+    cml_file = rebase_path("meta/dart_jit${product_suffix}_runner.cml")
 
     libraries = common_libs
 
@@ -257,13 +255,6 @@ template("jit_runner_package") {
         },
       ]
     }
-
-    meta = [
-      {
-        path = rebase_path("meta/dart_jit${product_suffix}_runner.cmx")
-        dest = "dart_jit${product_suffix}_runner.cmx"
-      },
-    ]
   }
 }
 

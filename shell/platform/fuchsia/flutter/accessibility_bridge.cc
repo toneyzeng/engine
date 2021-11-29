@@ -13,19 +13,11 @@
 
 #include "flutter/fml/logging.h"
 #include "flutter/lib/ui/semantics/semantics_node.h"
-#include "runtime/dart/utils/root_inspect_node.h"
+
+#include "../runtime/dart/utils/root_inspect_node.h"
 
 namespace flutter_runner {
 namespace {
-
-// Returns the ViewRef's koid.
-zx_koid_t GetKoid(const fuchsia::ui::views::ViewRef& view_ref) {
-  zx_handle_t handle = view_ref.reference.get();
-  zx_info_handle_basic_t info;
-  zx_status_t status = zx_object_get_info(handle, ZX_INFO_HANDLE_BASIC, &info,
-                                          sizeof(info), nullptr, nullptr);
-  return status == ZX_OK ? info.koid : ZX_KOID_INVALID;
-}
 
 #if !FLUTTER_RELEASE
 static constexpr char kTreeDumpInspectRootName[] = "semantic_tree_root";
@@ -226,36 +218,22 @@ std::string NodeChildrenToString(const flutter::SemanticsNode& node) {
 AccessibilityBridge::AccessibilityBridge(
     SetSemanticsEnabledCallback set_semantics_enabled_callback,
     DispatchSemanticsActionCallback dispatch_semantics_action_callback,
-    const std::shared_ptr<sys::ServiceDirectory> services,
-    fuchsia::ui::views::ViewRef view_ref)
-    : AccessibilityBridge(std::move(set_semantics_enabled_callback),
-                          std::move(dispatch_semantics_action_callback),
-                          services,
-                          dart_utils::RootInspectNode::CreateRootChild(
-                              std::to_string(GetKoid(view_ref))),
-                          std::move(view_ref)) {}
-
-AccessibilityBridge::AccessibilityBridge(
-    SetSemanticsEnabledCallback set_semantics_enabled_callback,
-    DispatchSemanticsActionCallback dispatch_semantics_action_callback,
-    const std::shared_ptr<sys::ServiceDirectory> services,
-    inspect::Node inspect_node,
-    fuchsia::ui::views::ViewRef view_ref)
+    fuchsia::accessibility::semantics::SemanticsManagerHandle semantics_manager,
+    fuchsia::ui::views::ViewRef view_ref,
+    inspect::Node inspect_node)
     : set_semantics_enabled_callback_(
           std::move(set_semantics_enabled_callback)),
       dispatch_semantics_action_callback_(
           std::move(dispatch_semantics_action_callback)),
       binding_(this),
+      fuchsia_semantics_manager_(semantics_manager.Bind()),
       inspect_node_(std::move(inspect_node)) {
-  services->Connect(fuchsia::accessibility::semantics::SemanticsManager::Name_,
-                    fuchsia_semantics_manager_.NewRequest().TakeChannel());
   fuchsia_semantics_manager_.set_error_handler([](zx_status_t status) {
     FML_LOG(ERROR) << "Flutter cannot connect to SemanticsManager with status: "
                    << zx_status_get_string(status) << ".";
   });
-  fidl::InterfaceHandle<fuchsia::accessibility::semantics::SemanticListener>
-      listener_handle;
-  binding_.Bind(listener_handle.NewRequest());
+  fuchsia_semantics_manager_->RegisterViewForSemantics(
+      std::move(view_ref), binding_.NewBinding(), tree_ptr_.NewRequest());
 
 #if !FLUTTER_RELEASE
   // The first argument to |CreateLazyValues| is the name of the lazy node, and
@@ -273,12 +251,9 @@ AccessibilityBridge::AccessibilityBridge(
               inspector.GetRoot().CreateChild(kTreeDumpInspectRootName),
               &inspector);
         }
-        return fit::make_ok_promise(std::move(inspector));
+        return fpromise::make_ok_promise(std::move(inspector));
       });
 #endif  // !FLUTTER_RELEASE
-
-  fuchsia_semantics_manager_->RegisterViewForSemantics(
-      std::move(view_ref), std::move(listener_handle), tree_ptr_.NewRequest());
 }
 
 bool AccessibilityBridge::GetSemanticsEnabled() const {
@@ -329,6 +304,15 @@ AccessibilityBridge::GetNodeAttributes(const flutter::SemanticsNode& node,
   } else {
     attributes.set_label(node.label);
     *added_size += node.label.size();
+  }
+
+  if (node.tooltip.size() > fuchsia::accessibility::semantics::MAX_LABEL_SIZE) {
+    attributes.set_secondary_label(node.tooltip.substr(
+        0, fuchsia::accessibility::semantics::MAX_LABEL_SIZE));
+    *added_size += fuchsia::accessibility::semantics::MAX_LABEL_SIZE;
+  } else {
+    attributes.set_secondary_label(node.tooltip);
+    *added_size += node.tooltip.size();
   }
 
   if (node.HasFlag(flutter::SemanticsFlags::kIsKeyboardKey)) {
@@ -692,7 +676,19 @@ void AccessibilityBridge::RequestAnnounce(const std::string message) {
 
 void AccessibilityBridge::UpdateScreenRects() {
   std::unordered_set<int32_t> visited_nodes;
-  UpdateScreenRects(kRootNodeId, SkM44{}, &visited_nodes);
+
+  // The embedder applies a special pixel ratio transform to the root of the
+  // view, and the accessibility bridge applies the inverse of this transform
+  // to the root node. However, this transform is not persisted in the flutter
+  // representation of the root node, so we need to account for it explicitly
+  // here.
+  float inverse_view_pixel_ratio = 1.f / last_seen_view_pixel_ratio_;
+  SkM44 inverse_view_pixel_ratio_transform;
+  inverse_view_pixel_ratio_transform.setScale(inverse_view_pixel_ratio,
+                                              inverse_view_pixel_ratio, 1.f);
+
+  UpdateScreenRects(kRootNodeId, inverse_view_pixel_ratio_transform,
+                    &visited_nodes);
 }
 
 void AccessibilityBridge::UpdateScreenRects(

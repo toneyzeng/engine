@@ -45,7 +45,7 @@ void ImageShader::initWithImage(CanvasImage* image,
         ToDart("ImageShader constructor called with non-genuine Image."));
     return;
   }
-  sk_image_ = image->image();
+  sk_image_ = UIDartState::CreateGPUObject(image->image());
   tmx_ = tmx;
   tmy_ = tmy;
   local_matrix_ = ToSkMatrix(matrix4);
@@ -61,12 +61,21 @@ sk_sp<SkShader> ImageShader::shader(SkSamplingOptions sampling) {
   if (sampling_is_locked_) {
     sampling = cached_sampling_;
   }
-  if (!cached_shader_.get() || cached_sampling_ != sampling) {
+  if (!cached_shader_.skia_object() || cached_sampling_ != sampling) {
     cached_sampling_ = sampling;
-    cached_shader_ = UIDartState::CreateGPUObject(
-        sk_image_->makeShader(tmx_, tmy_, sampling, &local_matrix_));
+    cached_shader_ =
+        UIDartState::CreateGPUObject(sk_image_.skia_object()->makeShader(
+            tmx_, tmy_, sampling, &local_matrix_));
   }
-  return cached_shader_.get();
+  return cached_shader_.skia_object();
+}
+
+int ImageShader::width() {
+  return sk_image_.skia_object()->width();
+}
+
+int ImageShader::height() {
+  return sk_image_.skia_object()->height();
 }
 
 ImageShader::ImageShader() = default;

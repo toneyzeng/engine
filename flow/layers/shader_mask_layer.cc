@@ -11,8 +11,6 @@ ShaderMaskLayer::ShaderMaskLayer(sk_sp<SkShader> shader,
                                  SkBlendMode blend_mode)
     : shader_(shader), mask_rect_(mask_rect), blend_mode_(blend_mode) {}
 
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
-
 void ShaderMaskLayer::Diff(DiffContext* context, const Layer* old_layer) {
   DiffContext::AutoSubtreeRestore subtree(context);
   auto* prev = static_cast<const ShaderMaskLayer*>(old_layer);
@@ -29,13 +27,7 @@ void ShaderMaskLayer::Diff(DiffContext* context, const Layer* old_layer) {
   context->SetLayerPaintRegion(this, context->CurrentSubtreeRegion());
 }
 
-#endif  // FLUTTER_ENABLE_DIFF_CONTEXT
-
 void ShaderMaskLayer::Preroll(PrerollContext* context, const SkMatrix& matrix) {
-#if defined(LEGACY_FUCHSIA_EMBEDDER)
-  CheckForChildLayerBelow(context);
-#endif
-
   Layer::AutoPrerollSaveLayerState save =
       Layer::AutoPrerollSaveLayerState::Create(context);
   ContainerLayer::Preroll(context, matrix);

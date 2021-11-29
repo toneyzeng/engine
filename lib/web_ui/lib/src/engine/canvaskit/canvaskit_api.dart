@@ -6,6 +6,9 @@
 ///
 /// Prefer keeping the original CanvasKit names so it is easier to locate
 /// the API behind these bindings in the Skia source code.
+// ignore_for_file: non_constant_identifier_names
+
+// ignore_for_file: public_member_api_docs
 @JS()
 library canvaskit_api;
 
@@ -15,8 +18,9 @@ import 'dart:js' as js;
 import 'dart:typed_data';
 
 import 'package:js/js.dart';
-import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart' as ui;
+
+import '../profiler.dart';
 
 /// Entrypoint into the CanvasKit API.
 late CanvasKit canvasKit;
@@ -42,7 +46,6 @@ class CanvasKit {
   external SkPaintStyleEnum get PaintStyle;
   external SkStrokeCapEnum get StrokeCap;
   external SkStrokeJoinEnum get StrokeJoin;
-  external SkFilterQualityEnum get FilterQuality;
   external SkBlurStyleEnum get BlurStyle;
   external SkTileModeEnum get TileMode;
   external SkFilterModeEnum get FilterMode;
@@ -101,6 +104,7 @@ class CanvasKit {
 
   external SkFontMgrNamespace get FontMgr;
   external TypefaceFontProviderNamespace get TypefaceFontProvider;
+  external SkTypefaceFactory get Typeface;
   external int GetWebGLContext(
       html.CanvasElement canvas, SkWebGLContextOptions options);
   external SkGrContext MakeGrContext(int glContext);
@@ -111,7 +115,6 @@ class CanvasKit {
     ColorSpace colorSpace,
   );
   external SkSurface MakeSWCanvasSurface(html.CanvasElement canvas);
-  external void setCurrentContext(int glContext);
 
   /// Creates an image from decoded pixels represented as a list of bytes.
   ///
@@ -120,10 +123,14 @@ class CanvasKit {
   /// Typically pixel data is obtained using [SkImage.readPixels]. The
   /// parameters specified in [SkImageInfo] passed [SkImage.readPixels] must
   /// match [info].
-  external SkImage MakeImage(
+  external SkImage? MakeImage(
     SkImageInfo info,
     Uint8List pixels,
     int bytesPerRow,
+  );
+  external SkImage? MakeLazyImageFromTextureSource(
+    Object src,
+    SkPartialImageInfo info,
   );
 }
 
@@ -329,7 +336,7 @@ final List<SkTextHeightBehavior> _skTextHeightBehaviors =
 ];
 
 SkTextHeightBehavior toSkTextHeightBehavior(ui.TextHeightBehavior behavior) {
-  int index = (behavior.applyHeightToFirstAscent ? 0 : 1 << 0) |
+  final int index = (behavior.applyHeightToFirstAscent ? 0 : 1 << 0) |
       (behavior.applyHeightToLastDescent ? 0 : 1 << 1);
   return _skTextHeightBehaviors[index];
 }
@@ -656,30 +663,6 @@ SkStrokeJoin toSkStrokeJoin(ui.StrokeJoin strokeJoin) {
 }
 
 @JS()
-class SkFilterQualityEnum {
-  external SkFilterQuality get None;
-  external SkFilterQuality get Low;
-  external SkFilterQuality get Medium;
-  external SkFilterQuality get High;
-}
-
-@JS()
-class SkFilterQuality {
-  external int get value;
-}
-
-final List<SkFilterQuality> _skFilterQualitys = <SkFilterQuality>[
-  canvasKit.FilterQuality.None,
-  canvasKit.FilterQuality.Low,
-  canvasKit.FilterQuality.Medium,
-  canvasKit.FilterQuality.High,
-];
-
-SkFilterQuality toSkFilterQuality(ui.FilterQuality filterQuality) {
-  return _skFilterQualitys[filterQuality.index];
-}
-
-@JS()
 class SkTileModeEnum {
   external SkTileMode get Clamp;
   external SkTileMode get Repeat;
@@ -869,7 +852,10 @@ class SkShader {
 
 @JS()
 class SkMaskFilterNamespace {
-  external SkMaskFilter MakeBlur(
+  // Creates a blur MaskFilter.
+  //
+  // Returns `null` if [sigma] is 0 or infinite.
+  external SkMaskFilter? MakeBlur(
       SkBlurStyle blurStyle, double sigma, bool respectCTM);
 }
 
@@ -879,7 +865,6 @@ class SkMaskFilterNamespace {
 //     external SkPaint SkPaint();
 @JS('window.flutterCanvasKit.Paint')
 class SkPaint {
-  // TODO(yjbanov): implement invertColors, see paint.cc
   external SkPaint();
   external void setBlendMode(SkBlendMode blendMode);
   external void setStyle(SkPaintStyle paintStyle);
@@ -890,11 +875,57 @@ class SkPaint {
   external void setColorInt(int color);
   external void setShader(SkShader? shader);
   external void setMaskFilter(SkMaskFilter? maskFilter);
-  external void setFilterQuality(SkFilterQuality filterQuality);
   external void setColorFilter(SkColorFilter? colorFilter);
   external void setStrokeMiter(double miterLimit);
   external void setImageFilter(SkImageFilter? imageFilter);
   external void delete();
+}
+
+@JS()
+@anonymous
+abstract class CkFilterOptions {}
+
+@JS()
+@anonymous
+class _CkCubicFilterOptions extends CkFilterOptions {
+  external double get B;
+  external double get C;
+
+  external factory _CkCubicFilterOptions({double B, double C});
+}
+
+@JS()
+@anonymous
+class _CkTransformFilterOptions extends CkFilterOptions {
+  external SkFilterMode get filter;
+  external SkMipmapMode get mipmap;
+
+  external factory _CkTransformFilterOptions(
+      {SkFilterMode filter, SkMipmapMode mipmap});
+}
+
+final Map<ui.FilterQuality, CkFilterOptions> _filterOptions =
+    <ui.FilterQuality, CkFilterOptions>{
+  ui.FilterQuality.none: _CkTransformFilterOptions(
+    filter: canvasKit.FilterMode.Nearest,
+    mipmap: canvasKit.MipmapMode.None,
+  ),
+  ui.FilterQuality.low: _CkTransformFilterOptions(
+    filter: canvasKit.FilterMode.Linear,
+    mipmap: canvasKit.MipmapMode.None,
+  ),
+  ui.FilterQuality.medium: _CkTransformFilterOptions(
+    filter: canvasKit.FilterMode.Linear,
+    mipmap: canvasKit.MipmapMode.Linear,
+  ),
+  ui.FilterQuality.high: _CkCubicFilterOptions(
+    B: 1.0 / 3,
+    C: 1.0 / 3,
+  ),
+};
+
+CkFilterOptions toSkFilterOptions(ui.FilterQuality filterQuality) {
+  return _filterOptions[filterQuality]!;
 }
 
 @JS()
@@ -911,6 +942,7 @@ class SkColorFilterNamespace {
   );
   external SkColorFilter MakeLinearToSRGBGamma();
   external SkColorFilter MakeSRGBToLinearGamma();
+  external SkColorFilter MakeCompose(SkColorFilter? outer, SkColorFilter inner);
 }
 
 @JS()
@@ -925,18 +957,18 @@ class SkImageFilterNamespace {
     double sigmaX,
     double sigmaY,
     SkTileMode tileMode,
-    Null input, // we don't use this yet
+    void input, // we don't use this yet
   );
 
   external SkImageFilter MakeMatrixTransform(
     Float32List matrix, // 3x3 matrix
-    SkFilterQuality filterQuality,
-    Null input, // we don't use this yet
+    CkFilterOptions filterOptions,
+    void input, // we don't use this yet
   );
 
   external SkImageFilter MakeColorFilter(
     SkColorFilter colorFilter,
-    Null input, // we don't use this yet
+    void input, // we don't use this yet
   );
 
   external SkImageFilter MakeCompose(
@@ -958,6 +990,19 @@ class SkPathNamespace {
 
   /// Creates an [SkPath] by combining [path1] and [path2] using [pathOp].
   external SkPath MakeFromOp(SkPath path1, SkPath path2, SkPathOp pathOp);
+}
+
+/// Converts a 4x4 Flutter matrix (represented as a [Float32List] in
+/// column major order) to an SkM44 which is a 4x4 matrix represented
+/// as a [Float32List] in row major order.
+Float32List toSkM44FromFloat32(Float32List matrix4) {
+  final Float32List skM44 = Float32List(16);
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 4; c++) {
+      skM44[c * 4 + r] = matrix4[r * 4 + c];
+    }
+  }
+  return skM44;
 }
 
 // Mappings from SkMatrix-index to input-index.
@@ -1829,12 +1874,17 @@ class SkTonalColors {
 class SkFontMgrNamespace {
   // TODO(yjbanov): can this be made non-null? It returns null in our unit-tests right now.
   external SkFontMgr? FromData(List<Uint8List> fonts);
-  external SkFontMgr RefDefault();
 }
 
 @JS()
 class TypefaceFontProviderNamespace {
   external TypefaceFontProvider Make();
+}
+
+@JS()
+@anonymous
+class SkTypefaceFactory {
+  external SkTypeface? MakeFreeTypeFaceFromData(ByteBuffer fontData);
 }
 
 /// Collects Skia objects that are no longer necessary.
@@ -2078,9 +2128,9 @@ class SkImageInfo {
   external factory SkImageInfo({
     required int width,
     required int height,
-    SkAlphaType alphaType,
-    ColorSpace colorSpace,
-    SkColorType colorType,
+    required SkColorType colorType,
+    required SkAlphaType alphaType,
+    required ColorSpace colorSpace,
   });
   external SkAlphaType get alphaType;
   external ColorSpace get colorSpace;
@@ -2094,4 +2144,21 @@ class SkImageInfo {
   external SkImageInfo makeColorSpace(ColorSpace colorSpace);
   external SkImageInfo makeColorType(SkColorType colorType);
   external SkImageInfo makeWH(int width, int height);
+}
+
+@JS()
+@anonymous
+class SkPartialImageInfo {
+  external factory SkPartialImageInfo({
+    required int width,
+    required int height,
+    required SkColorType colorType,
+    required SkAlphaType alphaType,
+    required ColorSpace colorSpace,
+  });
+  external SkAlphaType get alphaType;
+  external ColorSpace get colorSpace;
+  external SkColorType get colorType;
+  external int get height;
+  external int get width;
 }

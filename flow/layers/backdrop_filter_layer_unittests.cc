@@ -30,7 +30,6 @@ TEST_F(BackdropFilterLayerTest, PaintingEmptyLayerDies) {
   parent->Preroll(preroll_context(), SkMatrix());
   EXPECT_EQ(layer->paint_bounds(), kEmptyRect);
   EXPECT_FALSE(layer->needs_painting(paint_context()));
-  EXPECT_FALSE(layer->needs_system_composite());
 
   EXPECT_DEATH_IF_SUPPORTED(layer->Paint(paint_context()),
                             "needs_painting\\(context\\)");
@@ -263,14 +262,12 @@ TEST_F(BackdropFilterLayerTest, Readback) {
 
   // BDF with no filter blocks child with readback
   auto mock_layer =
-      std::make_shared<MockLayer>(SkPath(), SkPaint(), false, false, true);
+      std::make_shared<MockLayer>(SkPath(), SkPaint(), false, true);
   layer2->Add(mock_layer);
   preroll_context()->surface_needs_readback = false;
   layer2->Preroll(preroll_context(), initial_transform);
   EXPECT_FALSE(preroll_context()->surface_needs_readback);
 }
-
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
 
 using BackdropLayerDiffTest = DiffContextTest;
 
@@ -329,8 +326,6 @@ TEST_F(BackdropLayerDiffTest, BackdropLayer) {
   damage = DiffLayerTree(l5, l4);
   EXPECT_EQ(damage.frame_damage, SkIRect::MakeLTRB(0, 0, 190, 190));
 }
-
-#endif
 
 }  // namespace testing
 }  // namespace flutter

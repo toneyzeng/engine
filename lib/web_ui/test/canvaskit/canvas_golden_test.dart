@@ -15,23 +15,17 @@ import 'package:web_engine_tester/golden_tester.dart';
 
 import 'common.dart';
 
+// TODO(yjbanov): tests that render using Noto are not hermetic, as those fonts
+//                come from fonts.google.com, where fonts can change any time.
+//                These tests are skipped.
+//                https://github.com/flutter/flutter/issues/86432
+const bool kIssue86432Exists = true;
+
 void main() {
   internalBootstrapBrowserTest(() => testMain);
 }
 
-const ui.Rect kDefaultRegion = const ui.Rect.fromLTRB(0, 0, 500, 250);
-
-Future<void> matchPictureGolden(String goldenFile, CkPicture picture,
-    {ui.Rect region = kDefaultRegion, bool write = false}) async {
-  final EnginePlatformDispatcher dispatcher =
-      ui.window.platformDispatcher as EnginePlatformDispatcher;
-  final LayerSceneBuilder sb = LayerSceneBuilder();
-  sb.pushOffset(0, 0);
-  sb.addPicture(ui.Offset.zero, picture);
-  dispatcher.rasterizer!.draw(sb.build().layerTree);
-  await matchGoldenFile(goldenFile,
-      region: region, maxDiffRatePercent: 0.0, write: write);
-}
+const ui.Rect kDefaultRegion = ui.Rect.fromLTRB(0, 0, 500, 250);
 
 void testMain() {
   group('CkCanvas', () {
@@ -39,12 +33,12 @@ void testMain() {
 
     setUp(() {
       expect(notoDownloadQueue.downloader.debugActiveDownloadCount, 0);
-      expect(notoDownloadQueue.isPending, false);
+      expect(notoDownloadQueue.isPending, isFalse);
     });
 
     tearDown(() {
       expect(notoDownloadQueue.downloader.debugActiveDownloadCount, 0);
-      expect(notoDownloadQueue.isPending, false);
+      expect(notoDownloadQueue.isPending, isFalse);
     });
 
     test('renders using non-recording canvas if weak refs are supported',
@@ -57,8 +51,14 @@ void testMain() {
       expect(canvas.runtimeType, CkCanvas);
       drawTestPicture(canvas);
       await matchPictureGolden(
-          'canvaskit_picture.png', recorder.endRecording());
-    });
+        'canvaskit_picture.png',
+        recorder.endRecording(),
+        region: kDefaultRegion,
+      );
+    // Safari does not support weak refs (FinalizationRegistry).
+    // This test should be revisited when Safari ships weak refs.
+    // TODO(yjbanov): skip Firefox due to a crash: https://github.com/flutter/flutter/issues/86632
+    }, skip: isSafari || isFirefox);
 
     test('renders using a recording canvas if weak refs are not supported',
         () async {
@@ -69,11 +69,10 @@ void testMain() {
       drawTestPicture(canvas);
 
       final CkPicture originalPicture = recorder.endRecording();
-      await matchPictureGolden('canvaskit_picture.png', originalPicture);
+      await matchPictureGolden('canvaskit_picture.png', originalPicture, region: kDefaultRegion);
 
       final ByteData originalPixels =
-          await (await originalPicture.toImage(50, 50)).toByteData()
-              as ByteData;
+          (await (await originalPicture.toImage(50, 50)).toByteData())!;
 
       // Test that a picture restored from a snapshot looks the same.
       final CkPictureSnapshot? snapshot = canvas.pictureSnapshot;
@@ -81,12 +80,11 @@ void testMain() {
       final SkPicture restoredSkPicture = snapshot!.toPicture();
       expect(restoredSkPicture, isNotNull);
       final CkPicture restoredPicture = CkPicture(
-          restoredSkPicture, ui.Rect.fromLTRB(0, 0, 50, 50), snapshot);
+          restoredSkPicture, const ui.Rect.fromLTRB(0, 0, 50, 50), snapshot);
       final ByteData restoredPixels =
-          await (await restoredPicture.toImage(50, 50)).toByteData()
-              as ByteData;
+        (await (await restoredPicture.toImage(50, 50)).toByteData())!;
 
-      await matchPictureGolden('canvaskit_picture.png', restoredPicture);
+      await matchPictureGolden('canvaskit_picture.png', restoredPicture, region: kDefaultRegion);
       expect(restoredPixels.buffer.asUint8List(),
           originalPixels.buffer.asUint8List());
     });
@@ -114,7 +112,7 @@ void testMain() {
           canvas.save();
           for (int col = 0; col < 10; col += 1) {
             final double elevation = 2 * (col % 5).toDouble();
-            canvas.drawShadow(shape, ui.Color(0xFFFF0000), elevation, true);
+            canvas.drawShadow(shape, const ui.Color(0xFFFF0000), elevation, true);
             canvas.drawPath(shape, shapePaint);
 
             final PhysicalShapeEngineLayer psl = PhysicalShapeEngineLayer(
@@ -133,11 +131,7 @@ void testMain() {
             );
             canvas.drawRect(psl.paintBounds, shadowBoundsPaint);
 
-            final CkParagraphBuilder pb = CkParagraphBuilder(
-              CkParagraphStyle(),
-            );
-            pb.addText('$elevation');
-            final CkParagraph p = pb.build();
+            final CkParagraph p = makeSimpleText('$elevation');
             p.layout(const ui.ParagraphConstraints(width: 1000));
             canvas.drawParagraph(
                 p, ui.Offset(20 - p.maxIntrinsicWidth / 2, 20 - p.height / 2));
@@ -280,7 +274,7 @@ void testMain() {
       await testTextStyle('paragraph text height behavior',
           layoutWidth: 50,
           paragraphHeight: 1.5,
-          paragraphTextHeightBehavior: ui.TextHeightBehavior(
+          paragraphTextHeightBehavior: const ui.TextHeightBehavior(
             applyHeightToFirstAscent: false,
             applyHeightToLastDescent: false,
           ));
@@ -307,28 +301,28 @@ void testMain() {
           outerText: '次 化 刃 直 入 令',
           innerText: '',
           paragraphLocale: const ui.Locale('zh', 'CN'));
-    });
+    }, skip: kIssue86432Exists);
 
     test('text styles - paragraph locale zh_TW', () async {
       await testTextStyle('paragraph locale zh_TW',
           outerText: '次 化 刃 直 入 令',
           innerText: '',
           paragraphLocale: const ui.Locale('zh', 'TW'));
-    });
+    }, skip: kIssue86432Exists);
 
     test('text styles - paragraph locale ja', () async {
       await testTextStyle('paragraph locale ja',
           outerText: '次 化 刃 直 入 令',
           innerText: '',
           paragraphLocale: const ui.Locale('ja'));
-    });
+    }, skip: kIssue86432Exists);
 
     test('text styles - paragraph locale ko', () async {
       await testTextStyle('paragraph locale ko',
           outerText: '次 化 刃 直 入 令',
           innerText: '',
           paragraphLocale: const ui.Locale('ko'));
-    });
+    }, skip: kIssue86432Exists);
 
     test('text styles - color', () async {
       await testTextStyle('color', color: const ui.Color(0xFF009900));
@@ -404,7 +398,7 @@ void testMain() {
         'half leading inherited from paragraph',
         height: 20,
         fontSize: 10,
-        paragraphTextHeightBehavior: ui.TextHeightBehavior(
+        paragraphTextHeightBehavior: const ui.TextHeightBehavior(
           leadingDistribution: ui.TextLeadingDistribution.even,
         ),
       );
@@ -413,7 +407,7 @@ void testMain() {
         height: 20,
         fontSize: 10,
         leadingDistribution: ui.TextLeadingDistribution.proportional,
-        paragraphTextHeightBehavior: ui.TextHeightBehavior(
+        paragraphTextHeightBehavior: const ui.TextHeightBehavior(
           leadingDistribution: ui.TextLeadingDistribution.even,
         ),
       );
@@ -428,28 +422,28 @@ void testMain() {
           innerText: '次 化 刃 直 入 令',
           outerText: '',
           locale: const ui.Locale('zh', 'CN'));
-    });
+    }, skip: kIssue86432Exists);
 
     test('text styles - locale zh_TW', () async {
       await testTextStyle('locale zh_TW',
           innerText: '次 化 刃 直 入 令',
           outerText: '',
           locale: const ui.Locale('zh', 'TW'));
-    });
+    }, skip: kIssue86432Exists);
 
     test('text styles - locale ja', () async {
       await testTextStyle('locale ja',
           innerText: '次 化 刃 直 入 令',
           outerText: '',
           locale: const ui.Locale('ja'));
-    });
+    }, skip: kIssue86432Exists);
 
     test('text styles - locale ko', () async {
       await testTextStyle('locale ko',
           innerText: '次 化 刃 直 入 令',
           outerText: '',
           locale: const ui.Locale('ko'));
-    });
+    }, skip: kIssue86432Exists);
 
     test('text styles - background', () async {
       await testTextStyle('background',
@@ -479,14 +473,14 @@ void testMain() {
 
     test('text styles - shadows', () async {
       await testTextStyle('shadows', shadows: <ui.Shadow>[
-        ui.Shadow(
-          color: const ui.Color(0xFF999900),
-          offset: const ui.Offset(10, 10),
+        const ui.Shadow(
+          color: ui.Color(0xFF999900),
+          offset: ui.Offset(10, 10),
           blurRadius: 5,
         ),
-        ui.Shadow(
-          color: const ui.Color(0xFF009999),
-          offset: const ui.Offset(-10, -10),
+        const ui.Shadow(
+          color: ui.Color(0xFF009999),
+          offset: ui.Offset(-10, -10),
           blurRadius: 10,
         ),
       ]);
@@ -565,7 +559,7 @@ void testMain() {
         outerText: '欢',
         innerText: '',
       );
-    });
+    }, skip: kIssue86432Exists);
 
     test('text style - symbols', () async {
       // One of the CJK fonts loaded in one of the tests above also contains
@@ -578,7 +572,7 @@ void testMain() {
         outerText: '← ↑ → ↓ ',
         innerText: '',
       );
-    });
+    }, skip: kIssue86432Exists);
 
     test(
         'text style - foreground/background/color do not leak across paragraphs',
@@ -617,24 +611,24 @@ void testMain() {
         }
         builder.addText(text.toString());
         final CkParagraph paragraph = builder.build();
-        paragraph.layout(ui.ParagraphConstraints(width: testWidth));
+        paragraph.layout(const ui.ParagraphConstraints(width: testWidth));
         return paragraph;
       }
 
       final List<ParagraphFactory> variations = <ParagraphFactory>[
         () => createTestParagraph(),
-        () => createTestParagraph(color: ui.Color(0xFF009900)),
+        () => createTestParagraph(color: const ui.Color(0xFF009900)),
         () => createTestParagraph(
-            foreground: CkPaint()..color = ui.Color(0xFF990000)),
+            foreground: CkPaint()..color = const ui.Color(0xFF990000)),
         () => createTestParagraph(
-            background: CkPaint()..color = ui.Color(0xFF7777FF)),
+            background: CkPaint()..color = const ui.Color(0xFF7777FF)),
         () => createTestParagraph(
-              color: ui.Color(0xFFFF00FF),
-              background: CkPaint()..color = ui.Color(0xFF0000FF),
+              color: const ui.Color(0xFFFF00FF),
+              background: CkPaint()..color = const ui.Color(0xFF0000FF),
             ),
         () => createTestParagraph(
-              foreground: CkPaint()..color = ui.Color(0xFF00FFFF),
-              background: CkPaint()..color = ui.Color(0xFF0000FF),
+              foreground: CkPaint()..color = const ui.Color(0xFF00FFFF),
+              background: CkPaint()..color = const ui.Color(0xFF0000FF),
             ),
       ];
 
@@ -642,8 +636,8 @@ void testMain() {
       final CkCanvas canvas = recorder.beginRecording(ui.Rect.largest);
       canvas.translate(10, 10);
 
-      for (ParagraphFactory from in variations) {
-        for (ParagraphFactory to in variations) {
+      for (final ParagraphFactory from in variations) {
+        for (final ParagraphFactory to in variations) {
           canvas.save();
           final CkParagraph fromParagraph = from();
           canvas.drawParagraph(fromParagraph, ui.Offset.zero);
@@ -651,7 +645,7 @@ void testMain() {
           final ui.Offset leftEnd = ui.Offset(
               fromParagraph.maxIntrinsicWidth + 10, fromParagraph.height / 2);
           final ui.Offset rightEnd = ui.Offset(middle - 10, leftEnd.dy);
-          final ui.Offset tipOffset = ui.Offset(-5, -5);
+          const ui.Offset tipOffset = ui.Offset(-5, -5);
           canvas.drawLine(leftEnd, rightEnd, CkPaint());
           canvas.drawLine(rightEnd, rightEnd + tipOffset, CkPaint());
           canvas.drawLine(
@@ -668,7 +662,7 @@ void testMain() {
       await matchPictureGolden(
         'canvaskit_text_styles_do_not_leak.png',
         picture,
-        region: ui.Rect.fromLTRB(0, 0, testWidth, 850),
+        region: const ui.Rect.fromLTRB(0, 0, testWidth, 850),
       );
     });
 
@@ -761,6 +755,17 @@ void testMain() {
       );
     });
 
+    test('sample Bengali text', () async {
+      await testSampleText(
+        'bengali',
+        'ঈদের জামাত মসজিদে, মানতে হবে স্বাস্থ্যবিধি: ধর্ম মন্ত্রণালয়',
+      );
+    });
+
+    test('hindi svayan test', () async {
+      await testSampleText('hindi_svayan', 'स्वयं');
+    });
+
     // We've seen text break when we load many fonts simultaneously. This test
     // combines text in multiple languages into one long paragraph to make sure
     // we can handle it.
@@ -781,8 +786,37 @@ void testMain() {
             'საბეჭდი და ტიპოგრაფიული ინდუსტრიის უშინაარსო ტექსტია ',
       );
     });
-    // TODO: https://github.com/flutter/flutter/issues/60040
-    // TODO: https://github.com/flutter/flutter/issues/71520
+
+    test('emoji text with skin tone', () async {
+      await testSampleText('emoji_with_skin_tone', '👋🏿 👋🏾 👋🏽 👋🏼 👋🏻');
+    });
+
+    // Make sure we clear the canvas in between frames.
+    test('empty frame after contentful frame', () async {
+      // First draw a frame with a red rectangle
+      final CkPictureRecorder recorder = CkPictureRecorder();
+      final CkCanvas canvas = recorder.beginRecording(ui.Rect.largest);
+      canvas.drawRect(const ui.Rect.fromLTRB(20, 20, 100, 100),
+          CkPaint()..color = const ui.Color(0xffff0000));
+      final CkPicture picture = recorder.endRecording();
+      final LayerSceneBuilder builder = LayerSceneBuilder();
+      builder.pushOffset(0, 0);
+      builder.addPicture(ui.Offset.zero, picture);
+      final LayerTree layerTree = builder.build().layerTree;
+      EnginePlatformDispatcher.instance.rasterizer!.draw(layerTree);
+
+      // Now draw an empty layer tree and confirm that the red rectangle is
+      // no longer drawn.
+      final LayerSceneBuilder emptySceneBuilder = LayerSceneBuilder();
+      emptySceneBuilder.pushOffset(0, 0);
+      final LayerTree emptyLayerTree = emptySceneBuilder.build().layerTree;
+      EnginePlatformDispatcher.instance.rasterizer!.draw(emptyLayerTree);
+
+      await matchGoldenFile('canvaskit_empty_scene.png',
+          region: const ui.Rect.fromLTRB(0, 0, 100, 100));
+    });
+    // TODO(hterkelsen): https://github.com/flutter/flutter/issues/60040
+    // TODO(hterkelsen): https://github.com/flutter/flutter/issues/71520
   }, skip: isIosSafari || isFirefox);
 }
 
@@ -801,23 +835,25 @@ Future<void> testSampleText(String language, String text,
     ));
     paragraphBuilder.addText(text);
     final CkParagraph paragraph = paragraphBuilder.build();
-    paragraph.layout(ui.ParagraphConstraints(width: testWidth - 20));
+    paragraph.layout(const ui.ParagraphConstraints(width: testWidth - 20));
     canvas.drawParagraph(paragraph, const ui.Offset(10, 10));
     paragraphHeight = paragraph.height;
     return recorder.endRecording();
   });
-  await matchPictureGolden(
-    'canvaskit_sample_text_$language.png',
-    picture,
-    region: ui.Rect.fromLTRB(0, 0, testWidth, paragraphHeight + 20),
-    write: write,
-  );
+  if (!kIssue86432Exists) {
+    await matchPictureGolden(
+      'canvaskit_sample_text_$language.png',
+      picture,
+      region: ui.Rect.fromLTRB(0, 0, testWidth, paragraphHeight + 20),
+      write: write,
+    );
+  }
 }
 
 typedef ParagraphFactory = CkParagraph Function();
 
 void drawTestPicture(CkCanvas canvas) {
-  canvas.clear(ui.Color(0xFFFFFFF));
+  canvas.clear(const ui.Color(0xFFFFFFF));
 
   canvas.translate(10, 10);
 
@@ -826,12 +862,12 @@ void drawTestPicture(CkCanvas canvas) {
 
   canvas.save();
   canvas.clipRect(
-    ui.Rect.fromLTRB(0, 0, 45, 45),
+    const ui.Rect.fromLTRB(0, 0, 45, 45),
     ui.ClipOp.intersect,
     true,
   );
   canvas.clipRRect(
-    ui.RRect.fromLTRBR(5, 5, 50, 50, ui.Radius.circular(8)),
+    ui.RRect.fromLTRBR(5, 5, 50, 50, const ui.Radius.circular(8)),
     true,
   );
   canvas.clipPath(
@@ -843,23 +879,23 @@ void drawTestPicture(CkCanvas canvas) {
       ..close(),
     true,
   );
-  canvas.drawColor(ui.Color.fromARGB(255, 100, 100, 0), ui.BlendMode.srcOver);
+  canvas.drawColor(const ui.Color.fromARGB(255, 100, 100, 0), ui.BlendMode.srcOver);
   canvas.restore(); // remove clips
 
   canvas.translate(60, 0);
   canvas.drawCircle(
     const ui.Offset(30, 25),
     15,
-    CkPaint()..color = ui.Color(0xFF0000AA),
+    CkPaint()..color = const ui.Color(0xFF0000AA),
   );
 
   canvas.translate(60, 0);
   canvas.drawArc(
-    ui.Rect.fromLTRB(10, 20, 50, 40),
+    const ui.Rect.fromLTRB(10, 20, 50, 40),
     math.pi / 4,
     3 * math.pi / 2,
     true,
-    CkPaint()..color = ui.Color(0xFF00AA00),
+    CkPaint()..color = const ui.Color(0xFF00AA00),
   );
 
   canvas.translate(60, 0);
@@ -897,24 +933,24 @@ void drawTestPicture(CkCanvas canvas) {
 
   canvas.translate(60, 0);
   canvas.drawDRRect(
-    ui.RRect.fromLTRBR(0, 0, 40, 30, ui.Radius.elliptical(16, 8)),
-    ui.RRect.fromLTRBR(10, 10, 30, 20, ui.Radius.elliptical(4, 8)),
+    ui.RRect.fromLTRBR(0, 0, 40, 30, const ui.Radius.elliptical(16, 8)),
+    ui.RRect.fromLTRBR(10, 10, 30, 20, const ui.Radius.elliptical(4, 8)),
     CkPaint(),
   );
 
   canvas.translate(60, 0);
   canvas.drawImageRect(
     generateTestImage(),
-    ui.Rect.fromLTRB(0, 0, 15, 15),
-    ui.Rect.fromLTRB(10, 10, 40, 40),
+    const ui.Rect.fromLTRB(0, 0, 15, 15),
+    const ui.Rect.fromLTRB(10, 10, 40, 40),
     CkPaint(),
   );
 
   canvas.translate(60, 0);
   canvas.drawImageNine(
     generateTestImage(),
-    ui.Rect.fromLTRB(5, 5, 15, 15),
-    ui.Rect.fromLTRB(10, 10, 50, 40),
+    const ui.Rect.fromLTRB(5, 5, 15, 15),
+    const ui.Rect.fromLTRB(10, 10, 50, 40),
     CkPaint(),
   );
 
@@ -924,29 +960,29 @@ void drawTestPicture(CkCanvas canvas) {
   canvas.translate(0, 60);
   canvas.save();
 
-  canvas.drawLine(ui.Offset(0, 0), ui.Offset(40, 30), CkPaint());
+  canvas.drawLine(const ui.Offset(0, 0), const ui.Offset(40, 30), CkPaint());
 
   canvas.translate(60, 0);
   canvas.drawOval(
-    ui.Rect.fromLTRB(0, 0, 40, 30),
+    const ui.Rect.fromLTRB(0, 0, 40, 30),
     CkPaint(),
   );
 
   canvas.translate(60, 0);
   canvas.save();
-  canvas.clipRect(ui.Rect.fromLTRB(0, 0, 50, 30), ui.ClipOp.intersect, true);
-  canvas.drawPaint(CkPaint()..color = ui.Color(0xFF6688AA));
+  canvas.clipRect(const ui.Rect.fromLTRB(0, 0, 50, 30), ui.ClipOp.intersect, true);
+  canvas.drawPaint(CkPaint()..color = const ui.Color(0xFF6688AA));
   canvas.restore();
 
   canvas.translate(60, 0);
   {
     final CkPictureRecorder otherRecorder = CkPictureRecorder();
     final CkCanvas otherCanvas =
-        otherRecorder.beginRecording(ui.Rect.fromLTRB(0, 0, 40, 20));
+        otherRecorder.beginRecording(const ui.Rect.fromLTRB(0, 0, 40, 20));
     otherCanvas.drawCircle(
-      ui.Offset(30, 15),
+      const ui.Offset(30, 15),
       10,
-      CkPaint()..color = ui.Color(0xFFAABBCC),
+      CkPaint()..color = const ui.Color(0xFFAABBCC),
     );
     canvas.drawPicture(otherRecorder.endRecording());
   }
@@ -958,11 +994,11 @@ void drawTestPicture(CkCanvas canvas) {
   //                will ensure it's fixed when we have the fix.
   canvas.drawPoints(
     CkPaint()
-      ..color = ui.Color(0xFF0000FF)
+      ..color = const ui.Color(0xFF0000FF)
       ..strokeWidth = 5
       ..strokeCap = ui.StrokeCap.round,
     ui.PointMode.polygon,
-    offsetListToFloat32List(<ui.Offset>[
+    offsetListToFloat32List(const <ui.Offset>[
       ui.Offset(10, 10),
       ui.Offset(20, 10),
       ui.Offset(30, 20),
@@ -972,20 +1008,20 @@ void drawTestPicture(CkCanvas canvas) {
 
   canvas.translate(60, 0);
   canvas.drawRRect(
-    ui.RRect.fromLTRBR(0, 0, 40, 30, ui.Radius.circular(10)),
+    ui.RRect.fromLTRBR(0, 0, 40, 30, const ui.Radius.circular(10)),
     CkPaint(),
   );
 
   canvas.translate(60, 0);
   canvas.drawRect(
-    ui.Rect.fromLTRB(0, 0, 40, 30),
+    const ui.Rect.fromLTRB(0, 0, 40, 30),
     CkPaint(),
   );
 
   canvas.translate(60, 0);
   canvas.drawShadow(
-    CkPath()..addRect(ui.Rect.fromLTRB(0, 0, 40, 30)),
-    ui.Color(0xFF00FF00),
+    CkPath()..addRect(const ui.Rect.fromLTRB(0, 0, 40, 30)),
+    const ui.Color(0xFF00FF00),
     4,
     true,
   );
@@ -999,7 +1035,7 @@ void drawTestPicture(CkCanvas canvas) {
   canvas.drawVertices(
     CkVertices(
       ui.VertexMode.triangleFan,
-      <ui.Offset>[
+      const <ui.Offset>[
         ui.Offset(10, 30),
         ui.Offset(30, 50),
         ui.Offset(10, 60),
@@ -1017,44 +1053,44 @@ void drawTestPicture(CkCanvas canvas) {
     canvas.drawCircle(ui.Offset.zero, 5, CkPaint());
   }
   canvas.restoreToCount(restorePoint);
-  canvas.drawCircle(ui.Offset.zero, 7, CkPaint()..color = ui.Color(0xFFFF0000));
+  canvas.drawCircle(ui.Offset.zero, 7, CkPaint()..color = const ui.Color(0xFFFF0000));
 
   canvas.translate(60, 0);
-  canvas.drawLine(ui.Offset.zero, ui.Offset(30, 30), CkPaint());
+  canvas.drawLine(ui.Offset.zero, const ui.Offset(30, 30), CkPaint());
   canvas.save();
   canvas.rotate(-math.pi / 8);
-  canvas.drawLine(ui.Offset.zero, ui.Offset(30, 30), CkPaint());
+  canvas.drawLine(ui.Offset.zero, const ui.Offset(30, 30), CkPaint());
   canvas.drawCircle(
-      ui.Offset(30, 30), 7, CkPaint()..color = ui.Color(0xFF00AA00));
+      const ui.Offset(30, 30), 7, CkPaint()..color = const ui.Color(0xFF00AA00));
   canvas.restore();
 
   canvas.translate(60, 0);
   final CkPaint thickStroke = CkPaint()
     ..style = ui.PaintingStyle.stroke
     ..strokeWidth = 20;
-  final CkPaint semitransparent = CkPaint()..color = ui.Color(0x66000000);
+  final CkPaint semitransparent = CkPaint()..color = const ui.Color(0x66000000);
 
   canvas.saveLayer(kDefaultRegion, semitransparent);
-  canvas.drawLine(ui.Offset(10, 10), ui.Offset(50, 50), thickStroke);
-  canvas.drawLine(ui.Offset(50, 10), ui.Offset(10, 50), thickStroke);
+  canvas.drawLine(const ui.Offset(10, 10), const ui.Offset(50, 50), thickStroke);
+  canvas.drawLine(const ui.Offset(50, 10), const ui.Offset(10, 50), thickStroke);
   canvas.restore();
 
   canvas.translate(60, 0);
   canvas.saveLayerWithoutBounds(semitransparent);
-  canvas.drawLine(ui.Offset(10, 10), ui.Offset(50, 50), thickStroke);
-  canvas.drawLine(ui.Offset(50, 10), ui.Offset(10, 50), thickStroke);
+  canvas.drawLine(const ui.Offset(10, 10), const ui.Offset(50, 50), thickStroke);
+  canvas.drawLine(const ui.Offset(50, 10), const ui.Offset(10, 50), thickStroke);
   canvas.restore();
 
   // To test saveLayerWithFilter we draw three circles with only the middle one
   // blurred using the layer image filter.
   canvas.translate(60, 0);
   canvas.saveLayer(kDefaultRegion, CkPaint());
-  canvas.drawCircle(ui.Offset(30, 30), 10, CkPaint());
+  canvas.drawCircle(const ui.Offset(30, 30), 10, CkPaint());
   {
     canvas.saveLayerWithFilter(
         kDefaultRegion, ui.ImageFilter.blur(sigmaX: 5, sigmaY: 10));
-    canvas.drawCircle(ui.Offset(10, 10), 10, CkPaint());
-    canvas.drawCircle(ui.Offset(50, 50), 10, CkPaint());
+    canvas.drawCircle(const ui.Offset(10, 10), 10, CkPaint());
+    canvas.drawCircle(const ui.Offset(50, 50), 10, CkPaint());
     canvas.restore();
   }
   canvas.restore();
@@ -1070,7 +1106,7 @@ void drawTestPicture(CkCanvas canvas) {
   canvas.save();
   canvas.translate(30, 30);
   canvas.skew(2, 1.5);
-  canvas.drawRect(ui.Rect.fromLTRB(-10, -10, 10, 10), CkPaint());
+  canvas.drawRect(const ui.Rect.fromLTRB(-10, -10, 10, 10), CkPaint());
   canvas.restore();
 
   canvas.restore();
@@ -1088,22 +1124,10 @@ void drawTestPicture(CkCanvas canvas) {
   canvas.restore();
 
   canvas.translate(60, 0);
-  final CkParagraphBuilder pb = CkParagraphBuilder(CkParagraphStyle(
-    fontFamily: 'Roboto',
-    fontStyle: ui.FontStyle.normal,
-    fontWeight: ui.FontWeight.normal,
-    fontSize: 18,
-  ));
-  pb.pushStyle(CkTextStyle(
-    color: ui.Color(0xFF0000AA),
-  ));
-  pb.addText('Hello');
-  pb.pop();
-  final CkParagraph p = pb.build();
-  p.layout(ui.ParagraphConstraints(width: 1000));
+  final CkParagraph p = makeSimpleText('Hello', fontSize: 18, color: const ui.Color(0xFF0000AA));
   canvas.drawParagraph(
     p,
-    ui.Offset(10, 20),
+    const ui.Offset(10, 20),
   );
 
   canvas.translate(60, 0);
@@ -1113,7 +1137,7 @@ void drawTestPicture(CkCanvas canvas) {
       ..lineTo(50, 50)
       ..lineTo(10, 50)
       ..close(),
-    CkPaint()..color = ui.Color(0xFF0000AA),
+    CkPaint()..color = const ui.Color(0xFF0000AA),
   );
 
   canvas.restore();
@@ -1143,7 +1167,7 @@ CkImage generateTestImage() {
         colorSpace: SkColorSpaceSRGB,
       ),
       imageData,
-      4 * 20);
+      4 * 20)!;
   return CkImage(skImage);
 }
 
@@ -1219,8 +1243,8 @@ Future<void> testTextStyle(
     descriptionBuilder.addText(name);
     final CkParagraph descriptionParagraph = descriptionBuilder.build();
     descriptionParagraph
-        .layout(ui.ParagraphConstraints(width: testWidth / 2 - 70));
-    final ui.Offset descriptionOffset = ui.Offset(testWidth / 2 + 30, 0);
+        .layout(const ui.ParagraphConstraints(width: testWidth / 2 - 70));
+    const ui.Offset descriptionOffset = ui.Offset(testWidth / 2 + 30, 0);
     canvas.drawParagraph(descriptionParagraph, descriptionOffset);
 
     final CkParagraphBuilder pb = CkParagraphBuilder(CkParagraphStyle(
@@ -1302,7 +1326,7 @@ Future<void> testTextStyle(
   }
 
   // Render once to trigger font downloads.
-  CkPicture picture = await generatePictureWhenFontsStable(renderPicture);
+  final CkPicture picture = await generatePictureWhenFontsStable(renderPicture);
   await matchPictureGolden(
     'canvaskit_text_styles_${name.replaceAll(' ', '_')}.png',
     picture,
@@ -1319,6 +1343,8 @@ typedef PictureGenerator = CkPicture Function();
 Future<CkPicture> generatePictureWhenFontsStable(
     PictureGenerator generator) async {
   CkPicture picture = generator();
+  // Fallback fonts start downloading as a post-frame callback.
+  EnginePlatformDispatcher.instance.rasterizer!.debugRunPostFrameCallbacks();
   // Font downloading begins asynchronously so we inject a timer before checking the download queue.
   await Future<void>.delayed(Duration.zero);
   while (notoDownloadQueue.isPending ||
@@ -1326,6 +1352,7 @@ Future<CkPicture> generatePictureWhenFontsStable(
     await notoDownloadQueue.debugWhenIdle();
     await notoDownloadQueue.downloader.debugWhenIdle();
     picture = generator();
+    EnginePlatformDispatcher.instance.rasterizer!.debugRunPostFrameCallbacks();
     // Dummy timer for the same reason as above.
     await Future<void>.delayed(Duration.zero);
   }

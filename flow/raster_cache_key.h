@@ -7,8 +7,8 @@
 
 #include <unordered_map>
 
-#include "flutter/flow/matrix_decomposition.h"
 #include "flutter/fml/logging.h"
+#include "third_party/skia/include/core/SkMatrix.h"
 
 namespace flutter {
 
@@ -51,6 +51,9 @@ class RasterCacheKey {
 
 // The ID is the uint32_t picture uniqueID
 using PictureRasterCacheKey = RasterCacheKey<uint32_t>;
+
+// The ID is the uint32_t DisplayList uniqueID
+using DisplayListRasterCacheKey = RasterCacheKey<uint32_t>;
 
 class Layer;
 

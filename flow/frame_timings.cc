@@ -9,6 +9,7 @@
 
 #include "flutter/common/settings.h"
 #include "flutter/fml/logging.h"
+#include "flutter/fml/time/time_point.h"
 
 namespace flutter {
 
@@ -66,10 +67,44 @@ fml::TimePoint FrameTimingsRecorder::GetRasterEndTime() const {
   return raster_end_;
 }
 
+fml::TimePoint FrameTimingsRecorder::GetRasterEndWallTime() const {
+  std::scoped_lock state_lock(state_mutex_);
+  FML_DCHECK(state_ >= State::kRasterEnd);
+  return raster_end_wall_time_;
+}
+
 fml::TimeDelta FrameTimingsRecorder::GetBuildDuration() const {
   std::scoped_lock state_lock(state_mutex_);
   FML_DCHECK(state_ >= State::kBuildEnd);
   return build_end_ - build_start_;
+}
+
+/// Count of the layer cache entries
+size_t FrameTimingsRecorder::GetLayerCacheCount() const {
+  std::scoped_lock state_lock(state_mutex_);
+  FML_DCHECK(state_ >= State::kRasterEnd);
+  return layer_cache_count_;
+}
+
+/// Total bytes in all layer cache entries
+size_t FrameTimingsRecorder::GetLayerCacheBytes() const {
+  std::scoped_lock state_lock(state_mutex_);
+  FML_DCHECK(state_ >= State::kRasterEnd);
+  return layer_cache_bytes_;
+}
+
+/// Count of the picture cache entries
+size_t FrameTimingsRecorder::GetPictureCacheCount() const {
+  std::scoped_lock state_lock(state_mutex_);
+  FML_DCHECK(state_ >= State::kRasterEnd);
+  return picture_cache_count_;
+}
+
+/// Total bytes in all picture cache entries
+size_t FrameTimingsRecorder::GetPictureCacheBytes() const {
+  std::scoped_lock state_lock(state_mutex_);
+  FML_DCHECK(state_ >= State::kRasterEnd);
+  return picture_cache_bytes_;
 }
 
 void FrameTimingsRecorder::RecordVsync(fml::TimePoint vsync_start,
@@ -102,19 +137,39 @@ void FrameTimingsRecorder::RecordRasterStart(fml::TimePoint raster_start) {
   raster_start_ = raster_start;
 }
 
-FrameTiming FrameTimingsRecorder::RecordRasterEnd(fml::TimePoint raster_end) {
+FrameTiming FrameTimingsRecorder::RecordRasterEnd(const RasterCache* cache) {
   std::scoped_lock state_lock(state_mutex_);
   FML_DCHECK(state_ == State::kRasterStart);
   state_ = State::kRasterEnd;
-  raster_end_ = raster_end;
-  FrameTiming timing;
-  timing.Set(FrameTiming::kVsyncStart, vsync_start_);
-  timing.Set(FrameTiming::kBuildStart, build_start_);
-  timing.Set(FrameTiming::kBuildFinish, build_end_);
-  timing.Set(FrameTiming::kRasterStart, raster_start_);
-  timing.Set(FrameTiming::kRasterFinish, raster_end_);
-  timing.SetFrameNumber(GetFrameNumber());
-  return timing;
+  raster_end_ = fml::TimePoint::Now();
+  raster_end_wall_time_ = fml::TimePoint::CurrentWallTime();
+  if (cache) {
+    const RasterCacheMetrics& layer_metrics = cache->layer_metrics();
+    const RasterCacheMetrics& picture_metrics = cache->picture_metrics();
+    layer_cache_count_ = layer_metrics.total_count();
+    layer_cache_bytes_ = layer_metrics.total_bytes();
+    picture_cache_count_ = picture_metrics.total_count();
+    picture_cache_bytes_ = picture_metrics.total_bytes();
+  } else {
+    layer_cache_count_ = layer_cache_bytes_ = picture_cache_count_ =
+        picture_cache_bytes_ = 0;
+  }
+  timing_.Set(FrameTiming::kVsyncStart, vsync_start_);
+  timing_.Set(FrameTiming::kBuildStart, build_start_);
+  timing_.Set(FrameTiming::kBuildFinish, build_end_);
+  timing_.Set(FrameTiming::kRasterStart, raster_start_);
+  timing_.Set(FrameTiming::kRasterFinish, raster_end_);
+  timing_.Set(FrameTiming::kRasterFinishWallTime, raster_end_wall_time_);
+  timing_.SetFrameNumber(GetFrameNumber());
+  timing_.SetRasterCacheStatistics(layer_cache_count_, layer_cache_bytes_,
+                                   picture_cache_count_, picture_cache_bytes_);
+  return timing_;
+}
+
+FrameTiming FrameTimingsRecorder::GetRecordedTime() const {
+  std::scoped_lock state_lock(state_mutex_);
+  FML_DCHECK(state_ == State::kRasterEnd);
+  return timing_;
 }
 
 std::unique_ptr<FrameTimingsRecorder> FrameTimingsRecorder::CloneUntil(
@@ -122,6 +177,7 @@ std::unique_ptr<FrameTimingsRecorder> FrameTimingsRecorder::CloneUntil(
   std::scoped_lock state_lock(state_mutex_);
   std::unique_ptr<FrameTimingsRecorder> recorder =
       std::make_unique<FrameTimingsRecorder>(frame_number_);
+  FML_DCHECK(state_ >= state);
   recorder->state_ = state;
 
   if (state >= State::kVsync) {
@@ -133,7 +189,7 @@ std::unique_ptr<FrameTimingsRecorder> FrameTimingsRecorder::CloneUntil(
     recorder->build_start_ = build_start_;
   }
 
-  if (state >= State::kRasterEnd) {
+  if (state >= State::kBuildEnd) {
     recorder->build_end_ = build_end_;
   }
 
@@ -143,6 +199,11 @@ std::unique_ptr<FrameTimingsRecorder> FrameTimingsRecorder::CloneUntil(
 
   if (state >= State::kRasterEnd) {
     recorder->raster_end_ = raster_end_;
+    recorder->raster_end_wall_time_ = raster_end_wall_time_;
+    recorder->layer_cache_count_ = layer_cache_count_;
+    recorder->layer_cache_bytes_ = layer_cache_bytes_;
+    recorder->picture_cache_count_ = picture_cache_count_;
+    recorder->picture_cache_bytes_ = picture_cache_bytes_;
   }
 
   return recorder;

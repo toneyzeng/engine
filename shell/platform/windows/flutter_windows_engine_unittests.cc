@@ -19,6 +19,11 @@ std::unique_ptr<FlutterWindowsEngine> GetTestEngine() {
   properties.assets_path = L"C:\\foo\\flutter_assets";
   properties.icu_data_path = L"C:\\foo\\icudtl.dat";
   properties.aot_library_path = L"C:\\foo\\aot.so";
+
+  std::vector<const char*> test_arguments = {"arg1", "arg2"};
+  properties.dart_entrypoint_argc = test_arguments.size();
+  properties.dart_entrypoint_argv = test_arguments.data();
+
   FlutterProjectBundle project(properties);
   auto engine = std::make_unique<FlutterWindowsEngine>(project);
 
@@ -52,7 +57,9 @@ TEST(FlutterWindowsEngine, RunDoesExpectedInitialization) {
         // Spot-check arguments.
         EXPECT_STREQ(args->assets_path, "C:\\foo\\flutter_assets");
         EXPECT_STREQ(args->icu_data_path, "C:\\foo\\icudtl.dat");
-        EXPECT_EQ(args->dart_entrypoint_argc, 0);
+        EXPECT_EQ(args->dart_entrypoint_argc, 2U);
+        EXPECT_EQ(strcmp(args->dart_entrypoint_argv[0], "arg1"), 0);
+        EXPECT_EQ(strcmp(args->dart_entrypoint_argv[1], "arg2"), 0);
         EXPECT_NE(args->platform_message_callback, nullptr);
         EXPECT_NE(args->custom_task_runners, nullptr);
         EXPECT_EQ(args->custom_dart_entrypoint, nullptr);
@@ -222,6 +229,30 @@ TEST(FlutterWindowsEngine, SendPlatformMessageWithResponse) {
   EXPECT_TRUE(create_response_handle_called);
   EXPECT_TRUE(release_response_handle_called);
   EXPECT_TRUE(send_message_called);
+}
+
+TEST(FlutterWindowsEngine, DispatchSemanticsAction) {
+  std::unique_ptr<FlutterWindowsEngine> engine = GetTestEngine();
+  EngineModifier modifier(engine.get());
+
+  bool called = false;
+  std::string test_data = "Hello";
+  modifier.embedder_api().DispatchSemanticsAction = MOCK_ENGINE_PROC(
+      DispatchSemanticsAction,
+      ([&called, &test_data](auto engine, auto target, auto action, auto data,
+                             auto data_length) {
+        called = true;
+        EXPECT_EQ(target, 42);
+        EXPECT_EQ(action, kFlutterSemanticsActionDismiss);
+        EXPECT_EQ(memcmp(data, test_data.c_str(), test_data.size()), 0);
+        EXPECT_EQ(data_length, test_data.size());
+        return kSuccess;
+      }));
+
+  engine->DispatchSemanticsAction(
+      42, kFlutterSemanticsActionDismiss,
+      std::vector<uint8_t>(test_data.begin(), test_data.end()));
+  EXPECT_TRUE(called);
 }
 
 }  // namespace testing

@@ -5,6 +5,7 @@
 #include "flutter/shell/common/shell_test_platform_view_vulkan.h"
 
 #include "flutter/common/graphics/persistent_cache.h"
+#include "flutter/shell/common/context_options.h"
 #include "flutter/vulkan/vulkan_utilities.h"
 
 namespace flutter {
@@ -113,12 +114,8 @@ bool ShellTestPlatformViewVulkan::OffScreenSurface::CreateSkiaGrContext() {
     return false;
   }
 
-  GrContextOptions options;
-  if (PersistentCache::cache_sksl()) {
-    options.fShaderCacheStrategy = GrContextOptions::ShaderCacheStrategy::kSkSL;
-  }
-  PersistentCache::MarkStrategySet();
-  options.fPersistentCache = PersistentCache::GetCacheForProcess();
+  const auto options =
+      MakeDefaultContextOptions(ContextType::kRender, GrBackendApi::kVulkan);
 
   sk_sp<GrDirectContext> context =
       GrDirectContext::MakeVulkan(backend_context, options);
@@ -183,8 +180,11 @@ ShellTestPlatformViewVulkan::OffScreenSurface::AcquireFrame(
     return true;
   };
 
-  return std::make_unique<SurfaceFrame>(std::move(surface), true,
-                                        std::move(callback));
+  SurfaceFrame::FramebufferInfo framebuffer_info;
+  framebuffer_info.supports_readback = true;
+
+  return std::make_unique<SurfaceFrame>(
+      std::move(surface), std::move(framebuffer_info), std::move(callback));
 }
 
 GrDirectContext* ShellTestPlatformViewVulkan::OffScreenSurface::GetContext() {

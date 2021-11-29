@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.9
-
 // FlutterTesterOptions=--disallow-insecure-connections
 
 import 'dart:async';
@@ -54,7 +52,7 @@ Future<bool> _supportsIPv6() async {
 }
 
 void main() {
-  test('testWithHostname', () async {
+  test('testWithLocalIP', () async {
     await bindServerAndTest(await getLocalHostIP(), (HttpClient httpClient, Uri httpUri) async {
       asyncExpectThrows<UnsupportedError>(
           () async =>  httpClient.getUrl(httpUri));
@@ -66,6 +64,30 @@ void main() {
             zoneValues: <dynamic, dynamic>{#flutter.io.allow_http: false}));
       await runZoned(() => httpClient.getUrl(httpUri),
         zoneValues: <dynamic, dynamic>{#flutter.io.allow_http: true});
+    });
+  });
+
+  test('testWithHostname', () async {
+    await bindServerAndTest(Platform.localHostname, (HttpClient httpClient, Uri httpUri) async {
+      asyncExpectThrows<UnsupportedError>(
+          () async =>  httpClient.getUrl(httpUri));
+
+      final _MockZoneValue mockFoo = _MockZoneValue('foo');
+      asyncExpectThrows<UnsupportedError>(
+          () async => runZoned(() => httpClient.getUrl(httpUri),
+            zoneValues: <dynamic, dynamic>{#flutter.io.allow_http: mockFoo}));
+      expect(mockFoo.checked, isTrue);
+
+      final _MockZoneValue mockFalse = _MockZoneValue(false);
+      asyncExpectThrows<UnsupportedError>(
+          () async => runZoned(() => httpClient.getUrl(httpUri),
+            zoneValues: <dynamic, dynamic>{#flutter.io.allow_http: mockFalse}));
+      expect(mockFalse.checked, isTrue);
+
+      final _MockZoneValue mockTrue = _MockZoneValue(true);
+      await runZoned(() => httpClient.getUrl(httpUri),
+        zoneValues: <dynamic, dynamic>{#flutter.io.allow_http: mockTrue});
+      expect(mockFalse.checked, isTrue);
     });
   });
 
@@ -83,4 +105,28 @@ void main() {
       });
     }
   });
+}
+
+class _MockZoneValue {
+  _MockZoneValue(this._value);
+
+  Object? _value;
+  bool _falseChecked = false;
+  bool _trueChecked = false;
+
+  @override
+  bool operator ==(Object o) {
+    if(o == true) {
+      _trueChecked = true;
+    }
+    if(o == false) {
+      _falseChecked = true;
+    }
+    return _value == o;
+  }
+
+  bool get checked => _falseChecked && _trueChecked;
+
+  @override
+  int get hashCode => _value.hashCode;
 }

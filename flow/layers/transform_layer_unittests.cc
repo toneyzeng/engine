@@ -27,7 +27,7 @@ TEST_F(TransformLayerTest, PaintingEmptyLayerDies) {
                             "needs_painting\\(context\\)");
 }
 
-TEST_F(TransformLayerTest, PaintBeforePreollDies) {
+TEST_F(TransformLayerTest, PaintBeforePrerollDies) {
   SkPath child_path;
   child_path.addRect(5.0f, 6.0f, 20.5f, 21.5f);
   auto mock_layer = std::make_shared<MockLayer>(child_path, SkPaint());
@@ -225,8 +225,6 @@ TEST_F(TransformLayerTest, NestedSeparated) {
                  MockCanvas::DrawCall{1, MockCanvas::RestoreData{0}}}));
 }
 
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
-
 using TransformLayerLayerDiffTest = DiffContextTest;
 
 TEST_F(TransformLayerLayerDiffTest, Transform) {
@@ -332,8 +330,6 @@ TEST_F(TransformLayerLayerDiffTest, TransformNested) {
 
   EXPECT_EQ(damage.frame_damage, SkIRect::MakeLTRB(200, 200, 300, 302));
 }
-
-#endif
 
 }  // namespace testing
 }  // namespace flutter

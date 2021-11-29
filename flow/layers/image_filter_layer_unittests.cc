@@ -24,7 +24,6 @@ TEST_F(ImageFilterLayerTest, PaintingEmptyLayerDies) {
   layer->Preroll(preroll_context(), SkMatrix());
   EXPECT_EQ(layer->paint_bounds(), kEmptyRect);
   EXPECT_FALSE(layer->needs_painting(paint_context()));
-  EXPECT_FALSE(layer->needs_system_composite());
 
   EXPECT_DEATH_IF_SUPPORTED(layer->Paint(paint_context()),
                             "needs_painting\\(context\\)");
@@ -261,7 +260,7 @@ TEST_F(ImageFilterLayerTest, Readback) {
 
   // ImageFilterLayer blocks child with readback
   auto mock_layer =
-      std::make_shared<MockLayer>(SkPath(), SkPaint(), false, false, true);
+      std::make_shared<MockLayer>(SkPath(), SkPaint(), false, true);
   layer->Add(mock_layer);
   preroll_context()->surface_needs_readback = false;
   layer->Preroll(preroll_context(), initial_transform);
@@ -335,8 +334,6 @@ TEST_F(ImageFilterLayerTest, ChildrenNotCached) {
   EXPECT_FALSE(raster_cache()->Draw(mock_layer2.get(), cache_canvas));
 }
 
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
-
 using ImageFilterLayerDiffTest = DiffContextTest;
 
 TEST_F(ImageFilterLayerDiffTest, ImageFilterLayer) {
@@ -376,16 +373,55 @@ TEST_F(ImageFilterLayerDiffTest, ImageFilterLayer) {
   damage = DiffLayerTree(l3, l2);
   EXPECT_EQ(damage.frame_damage, SkIRect::MakeLTRB(130, 130, 140, 140));
 
-  // path intersecting ImageFilterLayer, should trigger ImageFilterLayer repaint
+  // path intersecting ImageFilterLayer, shouldn't trigger entire
+  // ImageFilterLayer repaint
   MockLayerTree l4;
   l4.root()->Add(scale);
   auto path2 = SkPath().addRect(SkRect::MakeLTRB(130, 130, 141, 141));
   l4.root()->Add(std::make_shared<MockLayer>(path2));
   damage = DiffLayerTree(l4, l3);
-  EXPECT_EQ(damage.frame_damage, SkIRect::MakeLTRB(130, 130, 280, 280));
+  EXPECT_EQ(damage.frame_damage, SkIRect::MakeLTRB(130, 130, 141, 141));
 }
 
-#endif
+TEST_F(ImageFilterLayerDiffTest, ImageFilterLayerInflatestChildSize) {
+  auto filter = SkImageFilters::Blur(10, 10, SkTileMode::kClamp, nullptr);
+
+  {
+    // tests later assume 30px paint area, fail early if that's not the case
+    auto paint_rect =
+        filter->filterBounds(SkIRect::MakeWH(10, 10), SkMatrix::I(),
+                             SkImageFilter::kForward_MapDirection);
+    EXPECT_EQ(paint_rect, SkIRect::MakeLTRB(-30, -30, 40, 40));
+  }
+
+  MockLayerTree l1;
+
+  // Use nested filter layers to check if both contribute to child bounds
+  auto filter_layer_1_1 = std::make_shared<ImageFilterLayer>(filter);
+  auto filter_layer_1_2 = std::make_shared<ImageFilterLayer>(filter);
+  filter_layer_1_1->Add(filter_layer_1_2);
+  auto path = SkPath().addRect(SkRect::MakeLTRB(100, 100, 110, 110));
+  filter_layer_1_2->Add(
+      std::make_shared<MockLayer>(path, SkPaint(SkColors::kYellow)));
+  l1.root()->Add(filter_layer_1_1);
+
+  // second layer tree with identical filter layers but different child layer
+  MockLayerTree l2;
+  auto filter_layer2_1 = std::make_shared<ImageFilterLayer>(filter);
+  filter_layer2_1->AssignOldLayer(filter_layer_1_1.get());
+  auto filter_layer2_2 = std::make_shared<ImageFilterLayer>(filter);
+  filter_layer2_2->AssignOldLayer(filter_layer_1_2.get());
+  filter_layer2_1->Add(filter_layer2_2);
+  filter_layer2_2->Add(
+      std::make_shared<MockLayer>(path, SkPaint(SkColors::kRed)));
+  l2.root()->Add(filter_layer2_1);
+
+  DiffLayerTree(l1, MockLayerTree());
+  auto damage = DiffLayerTree(l2, l1);
+
+  // ensure that filter properly inflated child size
+  EXPECT_EQ(damage.frame_damage, SkIRect::MakeLTRB(40, 40, 170, 170));
+}
 
 }  // namespace testing
 }  // namespace flutter

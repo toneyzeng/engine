@@ -30,6 +30,10 @@ source_set("ui") {
     "painting/color_filter.h",
     "painting/engine_layer.cc",
     "painting/engine_layer.h",
+    "painting/fragment_program.cc",
+    "painting/fragment_program.h",
+    "painting/fragment_shader.cc",
+    "painting/fragment_shader.h",
     "painting/gradient.cc",
     "painting/gradient.h",
     "painting/image.cc",
@@ -40,6 +44,7 @@ source_set("ui") {
     "painting/image_descriptor.h",
     "painting/image_encoding.cc",
     "painting/image_encoding.h",
+    "painting/image_encoding_impl.h",
     "painting/image_filter.cc",
     "painting/image_filter.h",
     "painting/image_generator.cc",
@@ -125,12 +130,14 @@ source_set("ui") {
 
   public_configs = [ "//flutter:config" ]
 
-  public_deps = [ "//flutter/third_party/txt" ]
+  public_deps = [
+    "//flutter/flow",
+    "//flutter/third_party/txt",
+  ]
 
   deps = [
     "//flutter/assets",
     "//flutter/common",
-    "//flutter/flow",
     "//flutter/fml",
     "//flutter/runtime:test_font",
     "//flutter/third_party/tonic",
@@ -151,19 +158,6 @@ source_set("ui") {
   if (is_win) {
     # Required for M_PI and others.
     defines += [ "_USE_MATH_DEFINES" ]
-  }
-
-  if (is_fuchsia && flutter_enable_legacy_fuchsia_embedder) {
-    sources += [
-      "compositing/scene_host.cc",
-      "compositing/scene_host.h",
-    ]
-
-    public_deps += [
-      "$fuchsia_sdk_root/pkg:async-cpp",
-      "//flutter/shell/platform/fuchsia/dart-pkg/fuchsia",
-      "//flutter/shell/platform/fuchsia/dart-pkg/zircon",
-    ]
   }
 }
 
@@ -202,6 +196,7 @@ if (enable_unittests) {
 
     sources = [
       "compositing/scene_builder_unittests.cc",
+      "hooks_unittests.cc",
       "painting/image_dispose_unittests.cc",
       "painting/image_encoding_unittests.cc",
       "painting/image_generator_registry_unittests.cc",

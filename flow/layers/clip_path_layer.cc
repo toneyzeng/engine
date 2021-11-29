@@ -5,18 +5,12 @@
 #include "flutter/flow/layers/clip_path_layer.h"
 #include "flutter/flow/paint_utils.h"
 
-#if defined(LEGACY_FUCHSIA_EMBEDDER)
-#include "lib/ui/scenic/cpp/commands.h"
-#endif
-
 namespace flutter {
 
 ClipPathLayer::ClipPathLayer(const SkPath& clip_path, Clip clip_behavior)
     : clip_path_(clip_path), clip_behavior_(clip_behavior) {
   FML_DCHECK(clip_behavior != Clip::none);
 }
-
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
 
 void ClipPathLayer::Diff(DiffContext* context, const Layer* old_layer) {
   DiffContext::AutoSubtreeRestore subtree(context);
@@ -33,8 +27,6 @@ void ClipPathLayer::Diff(DiffContext* context, const Layer* old_layer) {
   }
   context->SetLayerPaintRegion(this, context->CurrentSubtreeRegion());
 }
-
-#endif  // FLUTTER_ENABLE_DIFF_CONTEXT
 
 void ClipPathLayer::Preroll(PrerollContext* context, const SkMatrix& matrix) {
   TRACE_EVENT0("flutter", "ClipPathLayer::Preroll");
@@ -58,19 +50,6 @@ void ClipPathLayer::Preroll(PrerollContext* context, const SkMatrix& matrix) {
   context->cull_rect = previous_cull_rect;
 }
 
-#if defined(LEGACY_FUCHSIA_EMBEDDER)
-
-void ClipPathLayer::UpdateScene(std::shared_ptr<SceneUpdateContext> context) {
-  TRACE_EVENT0("flutter", "ClipPathLayer::UpdateScene");
-  FML_DCHECK(needs_system_composite());
-
-  // TODO(liyuqian): respect clip_behavior_
-  SceneUpdateContext::Clip clip(context, clip_path_.getBounds());
-  UpdateSceneChildren(context);
-}
-
-#endif
-
 void ClipPathLayer::Paint(PaintContext& context) const {
   TRACE_EVENT0("flutter", "ClipPathLayer::Paint");
   FML_DCHECK(needs_painting(context));
@@ -80,6 +59,7 @@ void ClipPathLayer::Paint(PaintContext& context) const {
                                           clip_behavior_ != Clip::hardEdge);
 
   if (UsesSaveLayer()) {
+    TRACE_EVENT0("flutter", "Canvas::saveLayer");
     context.internal_nodes_canvas->saveLayer(paint_bounds(), nullptr);
   }
   PaintChildren(context);

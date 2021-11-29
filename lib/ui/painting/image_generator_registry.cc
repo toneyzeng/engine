@@ -4,7 +4,6 @@
 
 #include <algorithm>
 
-#include "flutter/fml/trace_event.h"
 #include "flutter/lib/ui/painting/image_generator_registry.h"
 #include "third_party/skia/include/codec/SkCodec.h"
 #include "third_party/skia/include/core/SkImageGenerator.h"
@@ -48,11 +47,10 @@ ImageGeneratorRegistry::~ImageGeneratorRegistry() = default;
 
 void ImageGeneratorRegistry::AddFactory(ImageGeneratorFactory factory,
                                         int32_t priority) {
-  image_generator_factories_.insert(
-      {factory, priority, fml::tracing::TraceNonce()});
+  image_generator_factories_.insert({factory, priority, ++nonce_});
 }
 
-std::unique_ptr<ImageGenerator>
+std::shared_ptr<ImageGenerator>
 ImageGeneratorRegistry::CreateCompatibleGenerator(sk_sp<SkData> buffer) {
   if (!image_generator_factories_.size()) {
     FML_LOG(WARNING)
@@ -64,7 +62,7 @@ ImageGeneratorRegistry::CreateCompatibleGenerator(sk_sp<SkData> buffer) {
   }
 
   for (auto& factory : image_generator_factories_) {
-    std::unique_ptr<ImageGenerator> result = factory.callback(buffer);
+    std::shared_ptr<ImageGenerator> result = factory.callback(buffer);
     if (result) {
       return result;
     }

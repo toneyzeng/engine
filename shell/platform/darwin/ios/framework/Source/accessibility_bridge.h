@@ -18,9 +18,9 @@
 #include "flutter/lib/ui/semantics/custom_accessibility_action.h"
 #include "flutter/lib/ui/semantics/semantics_node.h"
 #import "flutter/shell/platform/darwin/common/framework/Headers/FlutterChannels.h"
-#import "flutter/shell/platform/darwin/ios/framework/Headers/FlutterViewController.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterTextInputPlugin.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterView.h"
+#import "flutter/shell/platform/darwin/ios/framework/Source/FlutterViewController_Internal.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/SemanticsObject.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/accessibility_bridge_ios.h"
 #include "third_party/skia/include/core/SkRect.h"
@@ -68,6 +68,8 @@ class AccessibilityBridge final : public AccessibilityBridgeIos {
 
   UIView* view() const override { return view_controller_.view; }
 
+  bool isVoiceOverRunning() const override { return view_controller_.isVoiceOverRunning; }
+
   fml::WeakPtr<AccessibilityBridge> GetWeakPtr();
 
   std::shared_ptr<FlutterPlatformViewsController> GetPlatformViewsController() const override {
@@ -97,12 +99,11 @@ class AccessibilityBridge final : public AccessibilityBridgeIos {
   int32_t last_focused_semantics_object_id_;
   fml::scoped_nsobject<NSMutableDictionary<NSNumber*, SemanticsObject*>> objects_;
   fml::scoped_nsprotocol<FlutterBasicMessageChannel*> accessibility_channel_;
-  fml::WeakPtrFactory<AccessibilityBridge> weak_factory_;
   int32_t previous_route_id_;
   std::unordered_map<int32_t, flutter::CustomAccessibilityAction> actions_;
   std::vector<int32_t> previous_routes_;
   std::unique_ptr<IosDelegate> ios_delegate_;
-
+  fml::WeakPtrFactory<AccessibilityBridge> weak_factory_;  // Must be the last member.
   FML_DISALLOW_COPY_AND_ASSIGN(AccessibilityBridge);
 };
 

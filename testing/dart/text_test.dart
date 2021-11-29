@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// @dart = 2.6
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui';
@@ -173,12 +172,13 @@ void testTextRange() {
 
 void testLoadFontFromList() {
   test('loadFontFromList will send platform message after font is loaded', () async {
-    final PlatformMessageCallback oldHandler = window.onPlatformMessage;
-    String actualName;
-    String message;
-    window.onPlatformMessage = (String name, ByteData data, PlatformMessageResponseCallback callback) {
+    final PlatformMessageCallback? oldHandler = window.onPlatformMessage;
+    late String actualName;
+    late String message;
+    window.onPlatformMessage = (String name, ByteData? data, PlatformMessageResponseCallback? callback) {
+      assert(data != null);
       actualName = name;
-      final Uint8List list = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+      final Uint8List list = data!.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
       message = utf8.decode(list);
     };
     final Uint8List fontData = Uint8List(0);
@@ -198,6 +198,7 @@ void testFontFeatureClass() {
     expect(const FontFeature.caseSensitiveForms(), const FontFeature('case', 1));
     expect(      FontFeature.characterVariant(1), const FontFeature('cv01', 1));
     expect(      FontFeature.characterVariant(18), const FontFeature('cv18', 1));
+    expect(      FontFeature.characterVariant(99), const FontFeature('cv99', 1));
     expect(const FontFeature.denominator(), const FontFeature('dnom', 1));
     expect(const FontFeature.fractions(), const FontFeature('frac', 1));
     expect(const FontFeature.historicalForms(), const FontFeature('hist', 1));

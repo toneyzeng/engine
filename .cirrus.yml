@@ -1,4 +1,4 @@
-gcp_credentials: ENCRYPTED[a4b6c1cb428a657573b775d39dd8006beed3013d01ca3d1a3972bdc2bd39bb937dd91ea3d98eeb9ce55e4bd303d045d3]
+gcp_credentials: ENCRYPTED[!48cff44dd32e9cc412d4d381c7fe68d373ca04cf2639f8192d21cb1a9ab5e21129651423a1cf88f3fd7fe2125c1cabd9!]
 
 # LINUX
 task:
@@ -49,8 +49,3 @@ task:
         cp -r $ENGINE_PATH/src/out/host_debug_unopt/gen/dart-pkg/sky_engine bin/cache/pkg/
         bin/flutter update-packages --local-engine=host_debug_unopt
         bin/flutter analyze --flutter-repo --local-engine=host_debug_unopt
-    # TODO(fujino): remove this once ci/licenses.sh is run on LUCI
-    - name: licenses_check
-      build_script: |
-        cd $ENGINE_PATH/src/flutter
-        ./ci/licenses.sh

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// TODO(flutter_web): the Web-only API below need to be cleaned up.
+// TODO(yjbanov): the Web-only API below need to be cleaned up.
 
 part of ui;
 
@@ -19,12 +19,11 @@ Future<dynamic> ensureTestPlatformInitializedThenRunTest(dynamic Function() body
   return _testPlatformInitializedFuture!.then<dynamic>((_) => body());
 }
 
-// TODO(yjbanov): can we make this late non-null? See https://github.com/dart-lang/sdk/issues/42214
 Future<void>? _platformInitializedFuture;
 
 Future<void> webOnlyInitializeTestDomRenderer({double devicePixelRatio = 3.0}) {
   // Force-initialize DomRenderer so it doesn't overwrite test pixel ratio.
-  engine.domRenderer;
+  engine.ensureDomRendererInitialized();
 
   // The following parameters are hard-coded in Flutter's test embedder. Since
   // we don't have an embedder yet this is the lowest-most layer we can put
@@ -35,14 +34,10 @@ Future<void> webOnlyInitializeTestDomRenderer({double devicePixelRatio = 3.0}) {
   engine.scheduleFrameCallback = () {};
   debugEmulateFlutterTesterEnvironment = true;
 
+  // Initialize platform once and reuse across all tests.
   if (_platformInitializedFuture != null) {
     return _platformInitializedFuture!;
   }
-
-  // Only load the Ahem font once and await the same future in all tests.
   return _platformInitializedFuture =
-      webOnlyInitializePlatform(assetManager: engine.WebOnlyMockAssetManager())
-          .timeout(const Duration(seconds: 2), onTimeout: () async {
-    throw Exception('Timed out loading Ahem font.');
-  });
+      webOnlyInitializePlatform(assetManager: engine.WebOnlyMockAssetManager());
 }

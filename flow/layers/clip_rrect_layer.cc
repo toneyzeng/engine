@@ -12,8 +12,6 @@ ClipRRectLayer::ClipRRectLayer(const SkRRect& clip_rrect, Clip clip_behavior)
   FML_DCHECK(clip_behavior != Clip::none);
 }
 
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
-
 void ClipRRectLayer::Diff(DiffContext* context, const Layer* old_layer) {
   DiffContext::AutoSubtreeRestore subtree(context);
   auto* prev = static_cast<const ClipRRectLayer*>(old_layer);
@@ -29,8 +27,6 @@ void ClipRRectLayer::Diff(DiffContext* context, const Layer* old_layer) {
   }
   context->SetLayerPaintRegion(this, context->CurrentSubtreeRegion());
 }
-
-#endif  // FLUTTER_ENABLE_DIFF_CONTEXT
 
 void ClipRRectLayer::Preroll(PrerollContext* context, const SkMatrix& matrix) {
   TRACE_EVENT0("flutter", "ClipRRectLayer::Preroll");
@@ -54,19 +50,6 @@ void ClipRRectLayer::Preroll(PrerollContext* context, const SkMatrix& matrix) {
   context->cull_rect = previous_cull_rect;
 }
 
-#if defined(LEGACY_FUCHSIA_EMBEDDER)
-
-void ClipRRectLayer::UpdateScene(std::shared_ptr<SceneUpdateContext> context) {
-  TRACE_EVENT0("flutter", "ClipRRectLayer::UpdateScene");
-  FML_DCHECK(needs_system_composite());
-
-  // TODO(liyuqian): respect clip_behavior_
-  SceneUpdateContext::Clip clip(context, clip_rrect_.getBounds());
-  UpdateSceneChildren(context);
-}
-
-#endif
-
 void ClipRRectLayer::Paint(PaintContext& context) const {
   TRACE_EVENT0("flutter", "ClipRRectLayer::Paint");
   FML_DCHECK(needs_painting(context));
@@ -76,6 +59,7 @@ void ClipRRectLayer::Paint(PaintContext& context) const {
                                            clip_behavior_ != Clip::hardEdge);
 
   if (UsesSaveLayer()) {
+    TRACE_EVENT0("flutter", "Canvas::saveLayer");
     context.internal_nodes_canvas->saveLayer(paint_bounds(), nullptr);
   }
   PaintChildren(context);

@@ -8,7 +8,6 @@ import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
-import android.content.ContextWrapper;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Insets;
@@ -28,6 +27,7 @@ import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewStructure;
 import android.view.WindowInsets;
 import android.view.WindowManager;
@@ -65,6 +65,7 @@ import io.flutter.plugin.localization.LocalizationPlugin;
 import io.flutter.plugin.mouse.MouseCursorPlugin;
 import io.flutter.plugin.platform.PlatformPlugin;
 import io.flutter.plugin.platform.PlatformViewsController;
+import io.flutter.util.ViewUtils;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -91,6 +92,8 @@ public class FlutterView extends SurfaceView
   public interface Provider {
     /**
      * Returns a reference to the Flutter view maintained by this object. This may be {@code null}.
+     *
+     * @return a reference to the Flutter view maintained by this object.
      */
     FlutterView getFlutterView();
   }
@@ -113,6 +116,7 @@ public class FlutterView extends SurfaceView
     int systemGestureInsetRight = 0;
     int systemGestureInsetBottom = 0;
     int systemGestureInsetLeft = 0;
+    int physicalTouchSlop = -1;
   }
 
   private final DartExecutor dartExecutor;
@@ -160,7 +164,7 @@ public class FlutterView extends SurfaceView
   public FlutterView(Context context, AttributeSet attrs, FlutterNativeView nativeView) {
     super(context, attrs);
 
-    Activity activity = getActivity(getContext());
+    Activity activity = ViewUtils.getActivity(getContext());
     if (activity == null) {
       throw new IllegalArgumentException("Bad context");
     }
@@ -176,6 +180,7 @@ public class FlutterView extends SurfaceView
     mIsSoftwareRenderingEnabled = mNativeView.getFlutterJNI().getIsSoftwareRenderingEnabled();
     mMetrics = new ViewportMetrics();
     mMetrics.devicePixelRatio = context.getResources().getDisplayMetrics().density;
+    mMetrics.physicalTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
     setFocusable(true);
     setFocusableInTouchMode(true);
 
@@ -253,20 +258,6 @@ public class FlutterView extends SurfaceView
     // Send initial platform information to Dart
     mLocalizationPlugin.sendLocalesToFlutter(getResources().getConfiguration());
     sendUserPlatformSettingsToDart();
-  }
-
-  private static Activity getActivity(Context context) {
-    if (context == null) {
-      return null;
-    }
-    if (context instanceof Activity) {
-      return (Activity) context;
-    }
-    if (context instanceof ContextWrapper) {
-      // Recurse up chain of base contexts until we find an Activity.
-      return getActivity(((ContextWrapper) context).getBaseContext());
-    }
-    return null;
   }
 
   @NonNull
@@ -356,26 +347,11 @@ public class FlutterView extends SurfaceView
     mFirstFrameListeners.remove(listener);
   }
 
-  /**
-   * Updates this to support rendering as a transparent {@link SurfaceView}.
-   *
-   * <p>Sets it on top of its window. The background color still needs to be controlled from within
-   * the Flutter UI itself.
-   *
-   * @deprecated FlutterView in the v1 embedding is always a SurfaceView and will cover
-   *     accessibility highlights when transparent. Consider migrating to the v2 Android embedding,
-   *     using {@link io.flutter.embedding.android.FlutterView.RenderMode#texture}, and setting
-   *     {@link io.flutter.embedding.android.FlutterView.TransparencyMode#transparent}. See also
-   *     https://github.com/flutter/flutter/wiki/Upgrading-pre-1.12-Android-projects.
-   */
-  @Deprecated
-  public void enableTransparentBackground() {
-    Log.w(
-        TAG,
-        "FlutterView in the v1 embedding is always a SurfaceView and will cover accessibility highlights when transparent. Consider migrating to the v2 Android embedding. https://github.com/flutter/flutter/wiki/Upgrading-pre-1.12-Android-projects");
-    setZOrderOnTop(true);
-    getHolder().setFormat(PixelFormat.TRANSPARENT);
-  }
+  @Override
+  public void enableBufferingIncomingMessages() {}
+
+  @Override
+  public void disableBufferingIncomingMessages() {}
 
   /**
    * Reverts this back to the {@link SurfaceView} defaults, at the back of its window and opaque.
@@ -774,7 +750,11 @@ public class FlutterView extends SurfaceView
             mMetrics.systemGestureInsetTop,
             mMetrics.systemGestureInsetRight,
             mMetrics.systemGestureInsetBottom,
-            mMetrics.systemGestureInsetLeft);
+            mMetrics.systemGestureInsetLeft,
+            mMetrics.physicalTouchSlop,
+            new int[0],
+            new int[0],
+            new int[0]);
   }
 
   // Called by FlutterNativeView to notify first Flutter frame rendered.
@@ -853,6 +833,12 @@ public class FlutterView extends SurfaceView
 
   @Override
   @UiThread
+  public TaskQueue makeBackgroundTaskQueue(TaskQueueOptions options) {
+    return null;
+  }
+
+  @Override
+  @UiThread
   public void send(String channel, ByteBuffer message) {
     send(channel, message, null);
   }
@@ -873,6 +859,12 @@ public class FlutterView extends SurfaceView
     mNativeView.setMessageHandler(channel, handler);
   }
 
+  @Override
+  @UiThread
+  public void setMessageHandler(String channel, BinaryMessageHandler handler, TaskQueue taskQueue) {
+    mNativeView.setMessageHandler(channel, handler, taskQueue);
+  }
+
   /** Listener will be called on the Android UI thread once when Flutter renders the first frame. */
   public interface FirstFrameListener {
     void onFirstFrame();
@@ -881,6 +873,12 @@ public class FlutterView extends SurfaceView
   @Override
   public TextureRegistry.SurfaceTextureEntry createSurfaceTexture() {
     final SurfaceTexture surfaceTexture = new SurfaceTexture(0);
+    return registerSurfaceTexture(surfaceTexture);
+  }
+
+  @Override
+  public TextureRegistry.SurfaceTextureEntry registerSurfaceTexture(
+      @NonNull SurfaceTexture surfaceTexture) {
     surfaceTexture.detachFromGLContext();
     final SurfaceTextureRegistryEntry entry =
         new SurfaceTextureRegistryEntry(nextTextureId.getAndIncrement(), surfaceTexture);

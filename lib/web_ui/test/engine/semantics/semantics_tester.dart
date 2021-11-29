@@ -7,7 +7,12 @@ import 'dart:html' as html;
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
-import 'package:ui/src/engine.dart';
+import 'package:ui/src/engine.dart' show domRenderer, toMatrix32;
+import 'package:ui/src/engine/browser_detection.dart';
+import 'package:ui/src/engine/host_node.dart';
+import 'package:ui/src/engine/semantics.dart';
+import 'package:ui/src/engine/util.dart';
+import 'package:ui/src/engine/vector_math.dart';
 import 'package:ui/ui.dart' as ui;
 
 import '../../matchers.dart';
@@ -18,14 +23,7 @@ import '../../matchers.dart';
 /// so we don't have to hardcode html.document across the test. (The host of a
 /// normal flutter app used to be html.document, but now that the app is wrapped
 /// in a Shadow DOM, that's not the case anymore.)
-///
-/// A [html.ShadowRoot] quacks very similarly to a [html.Document], but
-/// unfortunately they don't share any class/implement any interface that let us
-/// use them interchangeably.
-///
-/// This flutterRoot can be changed to return ShadowRoot or Document without
-/// the need to modify (most of) your code.
-html.ShadowRoot get appShadowRoot => domRenderer.glassPaneShadow!;
+HostNode get appHostNode => domRenderer.glassPaneShadow!;
 
 /// CSS style applied to the root of the semantics tree.
 // TODO(yjbanov): this should be handled internally by [expectSemanticsTree].
@@ -117,10 +115,16 @@ class SemanticsTester {
     double? thickness,
     ui.Rect? rect,
     String? label,
+    List<ui.StringAttribute>? labelAttributes,
     String? hint,
+    List<ui.StringAttribute>? hintAttributes,
     String? value,
+    List<ui.StringAttribute>? valueAttributes,
     String? increasedValue,
+    List<ui.StringAttribute>? increasedValueAttributes,
     String? decreasedValue,
+    List<ui.StringAttribute>? decreasedValueAttributes,
+    String? tooltip,
     ui.TextDirection? textDirection,
     Float64List? transform,
     Int32List? additionalActions,
@@ -205,70 +209,70 @@ class SemanticsTester {
 
     // Actions
     if (hasTap == true) {
-      actions != ui.SemanticsAction.tap.index;
+      actions |= ui.SemanticsAction.tap.index;
     }
     if (hasLongPress == true) {
-      actions != ui.SemanticsAction.longPress.index;
+      actions |= ui.SemanticsAction.longPress.index;
     }
     if (hasScrollLeft == true) {
-      actions != ui.SemanticsAction.scrollLeft.index;
+      actions |= ui.SemanticsAction.scrollLeft.index;
     }
     if (hasScrollRight == true) {
-      actions != ui.SemanticsAction.scrollRight.index;
+      actions |= ui.SemanticsAction.scrollRight.index;
     }
     if (hasScrollUp == true) {
-      actions != ui.SemanticsAction.scrollUp.index;
+      actions |= ui.SemanticsAction.scrollUp.index;
     }
     if (hasScrollDown == true) {
-      actions != ui.SemanticsAction.scrollDown.index;
+      actions |= ui.SemanticsAction.scrollDown.index;
     }
     if (hasIncrease == true) {
-      actions != ui.SemanticsAction.increase.index;
+      actions |= ui.SemanticsAction.increase.index;
     }
     if (hasDecrease == true) {
-      actions != ui.SemanticsAction.decrease.index;
+      actions |= ui.SemanticsAction.decrease.index;
     }
     if (hasShowOnScreen == true) {
-      actions != ui.SemanticsAction.showOnScreen.index;
+      actions |= ui.SemanticsAction.showOnScreen.index;
     }
     if (hasMoveCursorForwardByCharacter == true) {
-      actions != ui.SemanticsAction.moveCursorForwardByCharacter.index;
+      actions |= ui.SemanticsAction.moveCursorForwardByCharacter.index;
     }
     if (hasMoveCursorBackwardByCharacter == true) {
-      actions != ui.SemanticsAction.moveCursorBackwardByCharacter.index;
+      actions |= ui.SemanticsAction.moveCursorBackwardByCharacter.index;
     }
     if (hasSetSelection == true) {
-      actions != ui.SemanticsAction.setSelection.index;
+      actions |= ui.SemanticsAction.setSelection.index;
     }
     if (hasCopy == true) {
-      actions != ui.SemanticsAction.copy.index;
+      actions |= ui.SemanticsAction.copy.index;
     }
     if (hasCut == true) {
-      actions != ui.SemanticsAction.cut.index;
+      actions |= ui.SemanticsAction.cut.index;
     }
     if (hasPaste == true) {
-      actions != ui.SemanticsAction.paste.index;
+      actions |= ui.SemanticsAction.paste.index;
     }
     if (hasDidGainAccessibilityFocus == true) {
-      actions != ui.SemanticsAction.didGainAccessibilityFocus.index;
+      actions |= ui.SemanticsAction.didGainAccessibilityFocus.index;
     }
     if (hasDidLoseAccessibilityFocus == true) {
-      actions != ui.SemanticsAction.didLoseAccessibilityFocus.index;
+      actions |= ui.SemanticsAction.didLoseAccessibilityFocus.index;
     }
     if (hasCustomAction == true) {
-      actions != ui.SemanticsAction.customAction.index;
+      actions |= ui.SemanticsAction.customAction.index;
     }
     if (hasDismiss == true) {
-      actions != ui.SemanticsAction.dismiss.index;
+      actions |= ui.SemanticsAction.dismiss.index;
     }
     if (hasMoveCursorForwardByWord == true) {
-      actions != ui.SemanticsAction.moveCursorForwardByWord.index;
+      actions |= ui.SemanticsAction.moveCursorForwardByWord.index;
     }
     if (hasMoveCursorBackwardByWord == true) {
-      actions != ui.SemanticsAction.moveCursorBackwardByWord.index;
+      actions |= ui.SemanticsAction.moveCursorBackwardByWord.index;
     }
     if (hasSetText == true) {
-      actions != ui.SemanticsAction.setText.index;
+      actions |= ui.SemanticsAction.setText.index;
     }
 
     // Other attributes
@@ -280,7 +284,7 @@ class SemanticsTester {
     ui.Rect effectiveRect = rect ?? ui.Rect.zero;
     if (children != null && children.isNotEmpty) {
       effectiveRect = childRect(children.first);
-      for (SemanticsNodeUpdate child in children.skip(1)) {
+      for (final SemanticsNodeUpdate child in children.skip(1)) {
         effectiveRect = effectiveRect.expandToInclude(childRect(child));
       }
     }
@@ -308,10 +312,16 @@ class SemanticsTester {
       scrollExtentMin: scrollExtentMin ?? 0,
       rect: effectiveRect,
       label: label ?? '',
+      labelAttributes: labelAttributes ?? const <ui.StringAttribute>[],
       hint: hint ?? '',
+      hintAttributes: hintAttributes ?? const <ui.StringAttribute>[],
       value: value ?? '',
+      valueAttributes: valueAttributes ?? const <ui.StringAttribute>[],
       increasedValue: increasedValue ?? '',
+      increasedValueAttributes: increasedValueAttributes ?? const <ui.StringAttribute>[],
       decreasedValue: decreasedValue ?? '',
+      decreasedValueAttributes: decreasedValueAttributes ?? const <ui.StringAttribute>[],
+      tooltip: tooltip ?? '',
       transform: transform != null ? toMatrix32(transform) : Matrix4.identity().storage,
       elevation: elevation ?? 0,
       thickness: thickness ?? 0,
@@ -344,21 +354,21 @@ class SemanticsTester {
 
   /// Locates the [TextField] role manager of the semantics object with the give [id].
   TextField getTextField(int id) {
-    return getRoleManager(id, Role.textField) as TextField;
+    return getRoleManager(id, Role.textField)! as TextField;
   }
 }
 
 /// Verifies the HTML structure of the current semantics tree.
 void expectSemanticsTree(String semanticsHtml) {
   expect(
-    canonicalizeHtml(appShadowRoot.querySelector('flt-semantics')!.outerHtml!),
+    canonicalizeHtml(appHostNode.querySelector('flt-semantics')!.outerHtml!),
     canonicalizeHtml(semanticsHtml),
   );
 }
 
 /// Finds the first HTML element in the semantics tree used for scrolling.
 html.Element? findScrollable() {
-  return appShadowRoot.querySelectorAll('flt-semantics').cast<html.Element?>().firstWhere(
+  return appHostNode.querySelectorAll('flt-semantics').cast<html.Element?>().firstWhere(
         (html.Element? element) =>
             element!.style.overflow == 'hidden' ||
             element.style.overflowY == 'scroll' ||

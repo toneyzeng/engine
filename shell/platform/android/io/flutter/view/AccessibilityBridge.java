@@ -6,7 +6,9 @@ package io.flutter.view;
 
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
+import android.app.Activity;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.database.ContentObserver;
 import android.graphics.Rect;
 import android.net.Uri;
@@ -22,6 +24,7 @@ import android.text.style.TtsSpan;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityManager;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -35,6 +38,7 @@ import io.flutter.Log;
 import io.flutter.embedding.engine.systemchannels.AccessibilityChannel;
 import io.flutter.plugin.platform.PlatformViewsAccessibilityDelegate;
 import io.flutter.util.Predicate;
+import io.flutter.util.ViewUtils;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.Charset;
@@ -56,7 +60,7 @@ import java.util.regex.Pattern;
  *       View#onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo)}. The {@link
  *       #rootAccessibilityView} is expected to notify the {@code AccessibilityBridge} of relevant
  *       interactions: {@link #onAccessibilityHoverEvent(MotionEvent)}, {@link #reset()}, {@link
- *       #updateSemantics(ByteBuffer, String[])}, and {@link
+ *       #updateSemantics(ByteBuffer, String[], ByteBuffer[])}, and {@link
  *       #updateCustomAccessibilityActions(ByteBuffer, String[])}
  *   <li>An {@link AccessibilityChannel} that is connected to the running Flutter app.
  *   <li>Android's {@link AccessibilityManager} to query and listen for accessibility settings.
@@ -81,6 +85,25 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
   private static final float SCROLL_EXTENT_FOR_INFINITY = 100000.0f;
   private static final float SCROLL_POSITION_CAP_FOR_INFINITY = 70000.0f;
   private static final int ROOT_NODE_ID = 0;
+  private static final int SCROLLABLE_ACTIONS =
+      Action.SCROLL_RIGHT.value
+          | Action.SCROLL_LEFT.value
+          | Action.SCROLL_UP.value
+          | Action.SCROLL_DOWN.value;
+  // Flags that make a node accessibilty focusable.
+  private static final int FOCUSABLE_FLAGS =
+      Flag.HAS_CHECKED_STATE.value
+          | Flag.IS_CHECKED.value
+          | Flag.IS_SELECTED.value
+          | Flag.IS_TEXT_FIELD.value
+          | Flag.IS_FOCUSED.value
+          | Flag.HAS_ENABLED_STATE.value
+          | Flag.IS_ENABLED.value
+          | Flag.IS_IN_MUTUALLY_EXCLUSIVE_GROUP.value
+          | Flag.HAS_TOGGLED_STATE.value
+          | Flag.IS_TOGGLED.value
+          | Flag.IS_FOCUSABLE.value
+          | Flag.IS_SLIDER.value;
 
   // The minimal ID for an engine generated AccessibilityNodeInfo.
   //
@@ -262,6 +285,15 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
         /** The user has opened a tooltip. */
         @Override
         public void onTooltip(@NonNull String message) {
+          // Native Android tooltip is no longer announced when it pops up after API 28 and is
+          // handled by
+          // AccessibilityNodeInfo.setTooltipText instead.
+          //
+          // To reproduce native behavior, see
+          // https://developer.android.com/guide/topics/ui/tooltips.
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return;
+          }
           AccessibilityEvent e =
               obtainAccessibilityEvent(ROOT_NODE_ID, AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
           e.getText().add(message);
@@ -816,12 +848,28 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       result.setLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
     }
 
+    // Scopes routes are not focusable, only need to set the content
+    // for non-scopes-routes semantics nodes.
     if (semanticsNode.hasFlag(Flag.IS_TEXT_FIELD)) {
       result.setText(semanticsNode.getValueLabelHint());
     } else if (!semanticsNode.hasFlag(Flag.SCOPES_ROUTE)) {
       CharSequence content = semanticsNode.getValueLabelHint();
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+        if (semanticsNode.tooltip != null) {
+          // For backward compatibility with Flutter SDK before Android API
+          // level 28, the tooltip is appended at the end of content description.
+          content = content != null ? content : "";
+          content = content + "\n" + semanticsNode.tooltip;
+        }
+      }
       if (content != null) {
         result.setContentDescription(content);
+      }
+    }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      if (semanticsNode.tooltip != null) {
+        result.setTooltipText(semanticsNode.tooltip);
       }
     }
 
@@ -1016,27 +1064,38 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
         }
       case AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS:
         {
+          // Focused semantics node must be reset before sending the
+          // TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED event. Otherwise,
+          // TalkBack may think the node is still focused.
+          if (accessibilityFocusedSemanticsNode != null
+              && accessibilityFocusedSemanticsNode.id == virtualViewId) {
+            accessibilityFocusedSemanticsNode = null;
+          }
+          if (embeddedAccessibilityFocusedNodeId != null
+              && embeddedAccessibilityFocusedNodeId == virtualViewId) {
+            embeddedAccessibilityFocusedNodeId = null;
+          }
           accessibilityChannel.dispatchSemanticsAction(
               virtualViewId, Action.DID_LOSE_ACCESSIBILITY_FOCUS);
           sendAccessibilityEvent(
               virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED);
-          accessibilityFocusedSemanticsNode = null;
-          embeddedAccessibilityFocusedNodeId = null;
           return true;
         }
       case AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS:
         {
-          accessibilityChannel.dispatchSemanticsAction(
-              virtualViewId, Action.DID_GAIN_ACCESSIBILITY_FOCUS);
-          sendAccessibilityEvent(virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
-
           if (accessibilityFocusedSemanticsNode == null) {
             // When Android focuses a node, it doesn't invalidate the view.
             // (It does when it sends ACTION_CLEAR_ACCESSIBILITY_FOCUS, so
             // we only have to worry about this when the focused node is null.)
             rootAccessibilityView.invalidate();
           }
+          // Focused semantics node must be set before sending the TYPE_VIEW_ACCESSIBILITY_FOCUSED
+          // event. Otherwise, TalkBack may think the node is not focused yet.
           accessibilityFocusedSemanticsNode = semanticsNode;
+
+          accessibilityChannel.dispatchSemanticsAction(
+              virtualViewId, Action.DID_GAIN_ACCESSIBILITY_FOCUS);
+          sendAccessibilityEvent(virtualViewId, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUSED);
 
           if (semanticsNode.hasAction(Action.INCREASE)
               || semanticsNode.hasAction(Action.DECREASE)) {
@@ -1507,18 +1566,29 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     if (rootObject != null) {
       final float[] identity = new float[16];
       Matrix.setIdentityM(identity, 0);
-      // in android devices API 23 and above, the system nav bar can be placed on the left side
+      // In Android devices API 23 and above, the system nav bar can be placed on the left side
       // of the screen in landscape mode. We must handle the translation ourselves for the
       // a11y nodes.
       if (Build.VERSION.SDK_INT >= 23) {
-        WindowInsets insets = rootAccessibilityView.getRootWindowInsets();
-        if (insets != null) {
-          if (!lastLeftFrameInset.equals(insets.getSystemWindowInsetLeft())) {
-            rootObject.globalGeometryDirty = true;
-            rootObject.inverseTransformDirty = true;
+        boolean needsToApplyLeftCutoutInset = true;
+        // In Android devices API 28 and above, the `layoutInDisplayCutoutMode` window attribute
+        // can be set to allow overlapping content within the cutout area. Query the attribute
+        // to figure out whether the content overlaps with the cutout and decide whether to
+        // apply cutout inset.
+        if (Build.VERSION.SDK_INT >= 28) {
+          needsToApplyLeftCutoutInset = doesLayoutInDisplayCutoutModeRequireLeftInset();
+        }
+
+        if (needsToApplyLeftCutoutInset) {
+          WindowInsets insets = rootAccessibilityView.getRootWindowInsets();
+          if (insets != null) {
+            if (!lastLeftFrameInset.equals(insets.getSystemWindowInsetLeft())) {
+              rootObject.globalGeometryDirty = true;
+              rootObject.inverseTransformDirty = true;
+            }
+            lastLeftFrameInset = insets.getSystemWindowInsetLeft();
+            Matrix.translateM(identity, 0, lastLeftFrameInset, 0, 0);
           }
-          lastLeftFrameInset = insets.getSystemWindowInsetLeft();
-          Matrix.translateM(identity, 0, lastLeftFrameInset, 0, 0);
         }
       }
       rootObject.updateRecursively(identity, visitedObjects, false);
@@ -1551,7 +1621,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     if (lastAdded != null
         && (lastAdded.id != previousRouteId || newRoutes.size() != flutterNavigationStack.size())) {
       previousRouteId = lastAdded.id;
-      sendWindowChangeEvent(lastAdded);
+      onWindowNameChange(lastAdded);
     }
     flutterNavigationStack.clear();
     for (SemanticsNode semanticsNode : newRoutes) {
@@ -1763,15 +1833,17 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
   }
 
   /**
-   * Creates a {@link AccessibilityEvent#TYPE_WINDOW_STATE_CHANGED} and sends the event to Android's
-   * accessibility system.
+   * Informs the TalkBack user about window name changes.
+   *
+   * <p>This method sets accessibility panel title if the API level >= 28, otherwise, it creates a
+   * {@link AccessibilityEvent#TYPE_WINDOW_STATE_CHANGED} and sends the event to Android's
+   * accessibility system. In both cases, TalkBack announces the label of the route and re-addjusts
+   * the accessibility focus.
    *
    * <p>The given {@code route} should be a {@link SemanticsNode} that represents a navigation route
    * in the Flutter app.
    */
-  private void sendWindowChangeEvent(@NonNull SemanticsNode route) {
-    AccessibilityEvent event =
-        obtainAccessibilityEvent(route.id, AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
+  private void onWindowNameChange(@NonNull SemanticsNode route) {
     String routeName = route.getRouteName();
     if (routeName == null) {
       // The routeName will be null when there is no semantics node that represnets namesRoute in
@@ -1784,8 +1856,20 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       // next.
       routeName = " ";
     }
-    event.getText().add(routeName);
-    sendAccessibilityEvent(event);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      setAccessibilityPaneTitle(routeName);
+    } else {
+      AccessibilityEvent event =
+          obtainAccessibilityEvent(route.id, AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED);
+      event.getText().add(routeName);
+      sendAccessibilityEvent(event);
+    }
+  }
+
+  @TargetApi(28)
+  @RequiresApi(28)
+  private void setAccessibilityPaneTitle(String title) {
+    rootAccessibilityView.setAccessibilityPaneTitle(title);
   }
 
   /**
@@ -1820,6 +1904,29 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     event.setPackageName(rootAccessibilityView.getContext().getPackageName());
     event.setSource(rootAccessibilityView, virtualViewId);
     return event;
+  }
+
+  /**
+   * Reads the {@code layoutInDisplayCutoutMode} value from the window attribute and returns whether
+   * a left cutout inset is required.
+   *
+   * <p>The {@code layoutInDisplayCutoutMode} is added after API level 28.
+   */
+  @TargetApi(28)
+  @RequiresApi(28)
+  private boolean doesLayoutInDisplayCutoutModeRequireLeftInset() {
+    Context context = rootAccessibilityView.getContext();
+    Activity activity = ViewUtils.getActivity(context);
+    if (activity == null || activity.getWindow() == null) {
+      // The activity is not visible, it does not matter whether to apply left inset
+      // or not.
+      return false;
+    }
+    int layoutInDisplayCutoutMode = activity.getWindow().getAttributes().layoutInDisplayCutoutMode;
+    return layoutInDisplayCutoutMode
+            == WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
+        || layoutInDisplayCutoutMode
+            == WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT;
   }
 
   /**
@@ -1916,7 +2023,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
   }
 
   // Must match SemanticsActions in semantics.dart
-  // https://github.com/flutter/engine/blob/master/lib/ui/semantics.dart
+  // https://github.com/flutter/engine/blob/main/lib/ui/semantics.dart
   public enum Action {
     TAP(1 << 0),
     LONG_PRESS(1 << 1),
@@ -1949,7 +2056,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
   }
 
   // Must match SemanticsFlag in semantics.dart
-  // https://github.com/flutter/engine/blob/master/lib/ui/semantics.dart
+  // https://github.com/flutter/engine/blob/main/lib/ui/semantics.dart
   /* Package */ enum Flag {
     HAS_CHECKED_STATE(1 << 0),
     IS_CHECKED(1 << 1),
@@ -2089,7 +2196,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * analogous concept within Flutter.
    *
    * <p>To see how this {@code SemanticsNode}'s fields correspond to Flutter's semantics system, see
-   * semantics.dart: https://github.com/flutter/engine/blob/master/lib/ui/semantics.dart
+   * semantics.dart: https://github.com/flutter/engine/blob/main/lib/ui/semantics.dart
    */
   private static class SemanticsNode {
     private static boolean nullableHasAncestor(
@@ -2124,6 +2231,12 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     private List<StringAttribute> decreasedValueAttributes;
     private String hint;
     private List<StringAttribute> hintAttributes;
+
+    // The textual description of the backing widget's tooltip.
+    //
+    // The tooltip is attached through AccessibilityNodInfo.setTooltipText if
+    // API level >= 28; otherwise, this is attached to the end of content description.
+    @Nullable private String tooltip;
 
     // The id of the sibling node that is before this node in traversal
     // order.
@@ -2327,6 +2440,9 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
 
       hintAttributes = getStringAttributesFromBuffer(buffer, stringAttributeArgs);
 
+      stringIndex = buffer.getInt();
+      tooltip = stringIndex == -1 ? null : strings[stringIndex];
+
       textDirection = TextDirection.fromInt(buffer.getInt());
 
       left = buffer.getFloat();
@@ -2481,13 +2597,8 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       // If not explicitly set as focusable, then use our legacy
       // algorithm. Once all focusable widgets have a Focus widget, then
       // this won't be needed.
-      int scrollableActions =
-          Action.SCROLL_RIGHT.value
-              | Action.SCROLL_LEFT.value
-              | Action.SCROLL_UP.value
-              | Action.SCROLL_DOWN.value;
-      return (actions & ~scrollableActions) != 0
-          || flags != 0
+      return (actions & ~SCROLLABLE_ACTIONS) != 0
+          || (flags & FOCUSABLE_FLAGS) != 0
           || (label != null && !label.isEmpty())
           || (value != null && !value.isEmpty())
           || (hint != null && !hint.isEmpty());
@@ -2640,7 +2751,7 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
           switch (attribute.type) {
             case SPELLOUT:
               {
-                final TtsSpan ttsSpan = new TtsSpan.Builder(TtsSpan.TYPE_VERBATIM).build();
+                final TtsSpan ttsSpan = new TtsSpan.Builder<>(TtsSpan.TYPE_VERBATIM).build();
                 spannableString.setSpan(ttsSpan, attribute.start, attribute.end, 0);
                 break;
               }

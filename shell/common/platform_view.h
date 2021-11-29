@@ -8,9 +8,9 @@
 #include <functional>
 #include <memory>
 
-#include "flow/embedded_views.h"
 #include "flutter/common/graphics/texture.h"
 #include "flutter/common/task_runners.h"
+#include "flutter/flow/embedded_views.h"
 #include "flutter/flow/surface.h"
 #include "flutter/fml/macros.h"
 #include "flutter/fml/mapping.h"
@@ -22,14 +22,13 @@
 #include "flutter/lib/ui/window/pointer_data_packet.h"
 #include "flutter/lib/ui/window/pointer_data_packet_converter.h"
 #include "flutter/lib/ui/window/viewport_metrics.h"
+#include "flutter/shell/common/platform_message_handler.h"
 #include "flutter/shell/common/pointer_data_dispatcher.h"
 #include "flutter/shell/common/vsync_waiter.h"
 #include "third_party/skia/include/core/SkSize.h"
 #include "third_party/skia/include/gpu/GrDirectContext.h"
 
 namespace flutter {
-
-class Shell;
 
 //------------------------------------------------------------------------------
 /// @brief      Platform views are created by the shell on the platform task
@@ -62,7 +61,7 @@ class PlatformView {
     ///             Metal, Vulkan) specific. This is usually a sign to the
     ///             rasterizer to set up and begin rendering to that surface.
     ///
-    /// @param[in]  surface  The surface
+    /// @param[in]  surface           The surface
     ///
     virtual void OnPlatformViewCreated(std::unique_ptr<Surface> surface) = 0;
 
@@ -127,20 +126,6 @@ class PlatformView {
     ///
     virtual void OnPlatformViewDispatchPointerDataPacket(
         std::unique_ptr<PointerDataPacket> packet) = 0;
-
-    //--------------------------------------------------------------------------
-    /// @brief      Notifies the delegate that the platform view has encountered
-    ///             a key event. This key event and the callback needs to be
-    ///             forwarded to the running root isolate hosted by the engine
-    ///             on the UI thread.
-    ///
-    /// @param[in]  packet    The key data packet containing one key event.
-    /// @param[in]  callback  Called when the framework has decided whether
-    ///                       to handle this key data.
-    ///
-    virtual void OnPlatformViewDispatchKeyDataPacket(
-        std::unique_ptr<KeyDataPacket> packet,
-        std::function<void(bool /* handled */)> callback) = 0;
 
     //--------------------------------------------------------------------------
     /// @brief      Notifies the delegate that the platform view has encountered
@@ -391,7 +376,7 @@ class PlatformView {
   ///             may use the `DispatchPlatformMessage` method. This method is
   ///             for messages that go the other way.
   ///
-  /// @see        DisplatchPlatformMessage()
+  /// @see        DispatchPlatformMessage()
   ///
   /// @param[in]  message  The message
   ///
@@ -592,17 +577,6 @@ class PlatformView {
   ///
   void DispatchPointerDataPacket(std::unique_ptr<PointerDataPacket> packet);
 
-  //----------------------------------------------------------------------------
-  /// @brief      Dispatches key events from the embedder to the framework. Each
-  ///             key data packet contains one physical event and multiple
-  ///             logical key events. Each call to this method wakes up the UI
-  ///             thread.
-  ///
-  /// @param[in]  packet  The key data packet to dispatch to the framework.
-  ///
-  void DispatchKeyDataPacket(std::unique_ptr<KeyDataPacket> packet,
-                             Delegate::KeyDataResponse callback);
-
   //--------------------------------------------------------------------------
   /// @brief      Used by the embedder to specify a texture that it wants the
   ///             rasterizer to composite within the Flutter layer tree. All
@@ -796,17 +770,42 @@ class PlatformView {
       std::unique_ptr<AssetResolver> updated_asset_resolver,
       AssetResolver::AssetResolverType type);
 
+  //--------------------------------------------------------------------------
+  /// @brief      Creates an object that produces surfaces suitable for raster
+  ///             snapshotting. The rasterizer will request this surface if no
+  ///             on screen surface is currently available when an application
+  ///             requests a snapshot, e.g. if `Scene.toImage` or
+  ///             `Picture.toImage` are called while the application is in the
+  ///             background.
+  ///
+  ///             Not all backends support this kind of surface usage, and the
+  ///             default implementation returns nullptr. Platforms should
+  ///             override this if they can support GPU operations in the
+  ///             background and support GPU resource context usage.
+  ///
+  virtual std::unique_ptr<SnapshotSurfaceProducer>
+  CreateSnapshotSurfaceProducer();
+
+  //--------------------------------------------------------------------------
+  /// @brief Specifies a delegate that will receive PlatformMessages from
+  /// Flutter to the host platform.
+  ///
+  /// @details If this returns `null` that means PlatformMessages should be sent
+  /// to the PlatformView.  That is to protect legacy behavior, any embedder
+  /// that wants to support executing Platform Channel handlers on background
+  /// threads should be returing a thread-safe PlatformMessageHandler instead.
+  virtual std::shared_ptr<PlatformMessageHandler> GetPlatformMessageHandler()
+      const;
+
  protected:
+  // This is the only method called on the raster task runner.
+  virtual std::unique_ptr<Surface> CreateRenderingSurface();
+
   PlatformView::Delegate& delegate_;
   const TaskRunners task_runners_;
-
   PointerDataPacketConverter pointer_data_packet_converter_;
   SkISize size_;
-  fml::WeakPtrFactory<PlatformView> weak_factory_;
-
-  // Unlike all other methods on the platform view, this is called on the
-  // raster task runner.
-  virtual std::unique_ptr<Surface> CreateRenderingSurface();
+  fml::WeakPtrFactory<PlatformView> weak_factory_;  // Must be the last member.
 
  private:
   FML_DISALLOW_COPY_AND_ASSIGN(PlatformView);

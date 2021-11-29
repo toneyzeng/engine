@@ -60,6 +60,7 @@ std::unique_ptr<RuntimeController> RuntimeController::Spawn(
                                           p_persistent_isolate_data,     //
                                           context_);                     //
   result->spawning_isolate_ = root_isolate_;
+  result->platform_data_.viewport_metrics = ViewportMetrics();
   return result;
 }
 
@@ -177,9 +178,10 @@ bool RuntimeController::SetAccessibilityFeatures(int32_t flags) {
   return false;
 }
 
-bool RuntimeController::BeginFrame(fml::TimePoint frame_time) {
+bool RuntimeController::BeginFrame(fml::TimePoint frame_time,
+                                   uint64_t frame_number) {
   if (auto* platform_configuration = GetPlatformConfigurationIfAvailable()) {
-    platform_configuration->BeginFrame(frame_time);
+    platform_configuration->BeginFrame(frame_time, frame_number);
     return true;
   }
 
@@ -195,7 +197,7 @@ bool RuntimeController::ReportTimings(std::vector<int64_t> timings) {
   return false;
 }
 
-bool RuntimeController::NotifyIdle(int64_t deadline, size_t freed_hint) {
+bool RuntimeController::NotifyIdle(int64_t deadline) {
   std::shared_ptr<DartIsolate> root_isolate = root_isolate_.lock();
   if (!root_isolate) {
     return false;
@@ -203,9 +205,6 @@ bool RuntimeController::NotifyIdle(int64_t deadline, size_t freed_hint) {
 
   tonic::DartState::Scope scope(root_isolate);
 
-  // Dart will use the freed hint at the next idle notification. Make sure to
-  // Update it with our latest value before calling NotifyIdle.
-  Dart_HintFreed(freed_hint);
   Dart_NotifyIdle(deadline);
 
   // Idle notifications being in isolate scope are part of the contract.
@@ -237,20 +236,6 @@ bool RuntimeController::DispatchPointerDataPacket(
     return true;
   }
 
-  return false;
-}
-
-bool RuntimeController::DispatchKeyDataPacket(const KeyDataPacket& packet,
-                                              KeyDataResponse callback) {
-  if (auto* platform_configuration = GetPlatformConfigurationIfAvailable()) {
-    TRACE_EVENT1("flutter", "RuntimeController::DispatchKeyDataPacket", "mode",
-                 "basic");
-    uint64_t response_id =
-        platform_configuration->RegisterKeyDataResponse(std::move(callback));
-    platform_configuration->get_window(0)->DispatchKeyDataPacket(packet,
-                                                                 response_id);
-    return true;
-  }
   return false;
 }
 
@@ -357,8 +342,10 @@ tonic::DartErrorHandleType RuntimeController::GetLastError() {
 
 bool RuntimeController::LaunchRootIsolate(
     const Settings& settings,
+    fml::closure root_isolate_create_callback,
     std::optional<std::string> dart_entrypoint,
     std::optional<std::string> dart_entrypoint_library,
+    const std::vector<std::string>& dart_entrypoint_args,
     std::unique_ptr<IsolateConfiguration> isolate_configuration) {
   if (root_isolate_.lock()) {
     FML_LOG(ERROR) << "Root isolate was already running.";
@@ -371,10 +358,12 @@ bool RuntimeController::LaunchRootIsolate(
           isolate_snapshot_,                              //
           std::make_unique<PlatformConfiguration>(this),  //
           DartIsolate::Flags{},                           //
+          root_isolate_create_callback,                   //
           isolate_create_callback_,                       //
           isolate_shutdown_callback_,                     //
           dart_entrypoint,                                //
           dart_entrypoint_library,                        //
+          dart_entrypoint_args,                           //
           std::move(isolate_configuration),               //
           context_,                                       //
           spawning_isolate_.lock().get())                 //

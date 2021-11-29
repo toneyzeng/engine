@@ -28,10 +28,10 @@ TEST_F(PictureLayerTest, PaintBeforePrerollInvalidPictureDies) {
       layer_offset, SkiaGPUObject<SkPicture>(), false, false);
 
   EXPECT_DEATH_IF_SUPPORTED(layer->Paint(paint_context()),
-                            "picture_\\.get\\(\\)");
+                            "picture_\\.skia_object\\(\\)");
 }
 
-TEST_F(PictureLayerTest, PaintBeforePreollDies) {
+TEST_F(PictureLayerTest, PaintBeforePrerollDies) {
   const SkPoint layer_offset = SkPoint::Make(0.0f, 0.0f);
   const SkRect picture_bounds = SkRect::MakeLTRB(5.0f, 6.0f, 20.5f, 21.5f);
   auto mock_picture = SkPicture::MakePlaceholder(picture_bounds);
@@ -53,12 +53,10 @@ TEST_F(PictureLayerTest, PaintingEmptyLayerDies) {
   layer->Preroll(preroll_context(), SkMatrix());
   EXPECT_EQ(layer->paint_bounds(), SkRect::MakeEmpty());
   EXPECT_FALSE(layer->needs_painting(paint_context()));
-  EXPECT_FALSE(layer->needs_system_composite());
 
   EXPECT_DEATH_IF_SUPPORTED(layer->Paint(paint_context()),
                             "needs_painting\\(context\\)");
 }
-#endif
 
 TEST_F(PictureLayerTest, InvalidPictureDies) {
   const SkPoint layer_offset = SkPoint::Make(0.0f, 0.0f);
@@ -68,6 +66,7 @@ TEST_F(PictureLayerTest, InvalidPictureDies) {
   // Crashes reading a nullptr.
   EXPECT_DEATH_IF_SUPPORTED(layer->Preroll(preroll_context(), SkMatrix()), "");
 }
+#endif
 
 TEST_F(PictureLayerTest, SimplePicture) {
   const SkPoint layer_offset = SkPoint::Make(1.5f, -0.5f);
@@ -83,7 +82,6 @@ TEST_F(PictureLayerTest, SimplePicture) {
             picture_bounds.makeOffset(layer_offset.fX, layer_offset.fY));
   EXPECT_EQ(layer->picture(), mock_picture.get());
   EXPECT_TRUE(layer->needs_painting(paint_context()));
-  EXPECT_FALSE(layer->needs_system_composite());
 
   layer->Paint(paint_context());
   auto expected_draw_calls = std::vector(
@@ -98,8 +96,6 @@ TEST_F(PictureLayerTest, SimplePicture) {
        MockCanvas::DrawCall{1, MockCanvas::RestoreData{0}}});
   EXPECT_EQ(mock_canvas().draw_calls(), expected_draw_calls);
 }
-
-#ifdef FLUTTER_ENABLE_DIFF_CONTEXT
 
 using PictureLayerDiffTest = DiffContextTest;
 
@@ -121,6 +117,20 @@ TEST_F(PictureLayerDiffTest, SimplePicture) {
   MockLayerTree tree3;
   damage = DiffLayerTree(tree3, tree2);
   EXPECT_EQ(damage.frame_damage, SkIRect::MakeLTRB(10, 10, 60, 60));
+}
+
+TEST_F(PictureLayerDiffTest, FractionalTranslation) {
+  auto picture = CreatePicture(SkRect::MakeLTRB(10, 10, 60, 60), 1);
+
+  MockLayerTree tree1;
+  tree1.root()->Add(CreatePictureLayer(picture, SkPoint::Make(0.5, 0.5)));
+
+  auto damage = DiffLayerTree(tree1, MockLayerTree());
+#ifndef SUPPORT_FRACTIONAL_TRANSLATION
+  EXPECT_EQ(damage.frame_damage, SkIRect::MakeLTRB(11, 11, 61, 61));
+#else
+  EXPECT_EQ(damage.frame_damage, SkIRect::MakeLTRB(10, 10, 61, 61));
+#endif
 }
 
 TEST_F(PictureLayerDiffTest, PictureCompare) {
@@ -154,8 +164,6 @@ TEST_F(PictureLayerDiffTest, PictureCompare) {
   damage = DiffLayerTree(tree4, tree3);
   EXPECT_EQ(damage.frame_damage, SkIRect::MakeLTRB(20, 20, 70, 70));
 }
-
-#endif
 
 }  // namespace testing
 }  // namespace flutter

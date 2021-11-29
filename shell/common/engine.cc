@@ -98,7 +98,6 @@ Engine::Engine(Delegate& delegate,
       UIDartState::Context{
           task_runners_,                           // task runners
           std::move(snapshot_delegate),            // snapshot delegate
-          GetWeakPtr(),                            // hint freed delegate
           std::move(io_manager),                   // io manager
           std::move(unref_queue),                  // Skia unref queue
           image_decoder_.GetWeakPtr(),             // image decoder
@@ -113,7 +112,8 @@ std::unique_ptr<Engine> Engine::Spawn(
     Delegate& delegate,
     const PointerDataDispatcherMaker& dispatcher_maker,
     Settings settings,
-    std::unique_ptr<Animator> animator) const {
+    std::unique_ptr<Animator> animator,
+    const std::string& initial_route) const {
   auto result = std::make_unique<Engine>(
       /*delegate=*/delegate,
       /*dispatcher_maker=*/dispatcher_maker,
@@ -134,6 +134,7 @@ std::unique_ptr<Engine> Engine::Spawn(
       settings_.isolate_shutdown_callback,   // isolate shutdown callback
       settings_.persistent_isolate_data      // persistent isolate data
   );
+  result->initial_route_ = initial_route;
   return result;
 }
 
@@ -145,11 +146,15 @@ fml::WeakPtr<Engine> Engine::GetWeakPtr() const {
 
 void Engine::SetupDefaultFontManager() {
   TRACE_EVENT0("flutter", "Engine::SetupDefaultFontManager");
-  font_collection_->SetupDefaultFontManager();
+  font_collection_->SetupDefaultFontManager(settings_.font_initialization_data);
 }
 
 std::shared_ptr<AssetManager> Engine::GetAssetManager() {
   return asset_manager_;
+}
+
+fml::WeakPtr<ImageGeneratorRegistry> Engine::GetImageGeneratorRegistry() {
+  return image_generator_registry_.GetWeakPtr();
 }
 
 bool Engine::UpdateAssetManager(
@@ -194,6 +199,10 @@ Engine::RunStatus Engine::Run(RunConfiguration configuration) {
 
   last_entry_point_ = configuration.GetEntrypoint();
   last_entry_point_library_ = configuration.GetEntrypointLibrary();
+#if (FLUTTER_RUNTIME_MODE == FLUTTER_RUNTIME_MODE_DEBUG)
+  // This is only used to support restart.
+  last_entry_point_args_ = configuration.GetEntrypointArgs();
+#endif
 
   UpdateAssetManager(configuration.GetAssetManager());
 
@@ -201,10 +210,21 @@ Engine::RunStatus Engine::Run(RunConfiguration configuration) {
     return RunStatus::FailureAlreadyRunning;
   }
 
+  // If the embedding prefetched the default font manager, then set up the
+  // font manager later in the engine launch process.  This makes it less
+  // likely that the setup will need to wait for the prefetch to complete.
+  auto root_isolate_create_callback = [&]() {
+    if (settings_.prefetched_default_font_manager) {
+      SetupDefaultFontManager();
+    }
+  };
+
   if (!runtime_controller_->LaunchRootIsolate(
           settings_,                                 //
+          root_isolate_create_callback,              //
           configuration.GetEntrypoint(),             //
           configuration.GetEntrypointLibrary(),      //
+          configuration.GetEntrypointArgs(),         //
           configuration.TakeIsolateConfiguration())  //
   ) {
     return RunStatus::Failure;
@@ -221,9 +241,9 @@ Engine::RunStatus Engine::Run(RunConfiguration configuration) {
   return Engine::RunStatus::Success;
 }
 
-void Engine::BeginFrame(fml::TimePoint frame_time) {
+void Engine::BeginFrame(fml::TimePoint frame_time, uint64_t frame_number) {
   TRACE_EVENT0("flutter", "Engine::BeginFrame");
-  runtime_controller_->BeginFrame(frame_time);
+  runtime_controller_->BeginFrame(frame_time, frame_number);
 }
 
 void Engine::ReportTimings(std::vector<int64_t> timings) {
@@ -231,27 +251,11 @@ void Engine::ReportTimings(std::vector<int64_t> timings) {
   runtime_controller_->ReportTimings(std::move(timings));
 }
 
-void Engine::HintFreed(size_t size) {
-  hint_freed_bytes_since_last_call_ += size;
-}
-
 void Engine::NotifyIdle(int64_t deadline) {
   auto trace_event = std::to_string(deadline - Dart_TimelineGetMicros());
   TRACE_EVENT1("flutter", "Engine::NotifyIdle", "deadline_now_delta",
                trace_event.c_str());
-  // Avoid asking the RuntimeController to call Dart_HintFreed more than once
-  // every 5 seconds.
-  // This is to avoid GCs happening too frequently e.g. when an animated GIF is
-  // playing and disposing of an image every frame.
-  fml::TimePoint now = delegate_.GetCurrentTimePoint();
-  fml::TimeDelta delta = now - last_hint_freed_call_time_;
-  size_t hint_freed_bytes = 0;
-  if (delta.ToMilliseconds() > 5000 && hint_freed_bytes_since_last_call_ > 0) {
-    hint_freed_bytes = hint_freed_bytes_since_last_call_;
-    hint_freed_bytes_since_last_call_ = 0;
-    last_hint_freed_call_time_ = now;
-  }
-  runtime_controller_->NotifyIdle(deadline, hint_freed_bytes);
+  runtime_controller_->NotifyIdle(deadline);
 }
 
 std::optional<uint32_t> Engine::GetUIIsolateReturnCode() {
@@ -276,7 +280,6 @@ tonic::DartErrorHandleType Engine::GetUIIsolateLastError() {
 
 void Engine::OnOutputSurfaceCreated() {
   have_surface_ = true;
-  StartAnimatorIfPossible();
   ScheduleFrame();
 }
 
@@ -436,14 +439,6 @@ void Engine::DispatchPointerDataPacket(
   pointer_data_dispatcher_->DispatchPacket(std::move(packet), trace_flow_id);
 }
 
-void Engine::DispatchKeyDataPacket(std::unique_ptr<KeyDataPacket> packet,
-                                   KeyDataResponse callback) {
-  TRACE_EVENT0("flutter", "Engine::DispatchKeyDataPacket");
-  if (runtime_controller_) {
-    runtime_controller_->DispatchKeyDataPacket(*packet, std::move(callback));
-  }
-}
-
 void Engine::DispatchSemanticsAction(int id,
                                      SemanticsAction action,
                                      fml::MallocMapping args) {
@@ -476,6 +471,7 @@ std::string Engine::DefaultRouteName() {
 }
 
 void Engine::ScheduleFrame(bool regenerate_layer_tree) {
+  StartAnimatorIfPossible();
   animator_->RequestFrame(regenerate_layer_tree);
 }
 
@@ -569,6 +565,10 @@ const std::string& Engine::GetLastEntrypoint() const {
 
 const std::string& Engine::GetLastEntrypointLibrary() const {
   return last_entry_point_library_;
+}
+
+const std::vector<std::string>& Engine::GetLastEntrypointArgs() const {
+  return last_entry_point_args_;
 }
 
 // |RuntimeDelegate|
