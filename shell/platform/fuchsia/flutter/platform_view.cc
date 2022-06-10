@@ -51,6 +51,7 @@ void SetInterfaceErrorHandler(fidl::Binding<T>& binding, std::string name) {
 }
 
 PlatformView::PlatformView(
+    bool is_flatland,
     flutter::PlatformView::Delegate& delegate,
     flutter::TaskRunners task_runners,
     fuchsia::ui::views::ViewRef view_ref,
@@ -121,30 +122,33 @@ PlatformView::PlatformView(
   });
 
   // Begin watching for pointer events.
-  pointer_delegate_->WatchLoop([weak = weak_factory_.GetWeakPtr()](
-                                   std::vector<flutter::PointerData> events) {
-    if (!weak) {
-      FML_LOG(WARNING) << "PlatformView use-after-free attempted. Ignoring.";
-      return;
-    }
+  if (is_flatland) {  // TODO(fxbug.dev/85125): make unconditional
+    pointer_delegate_->WatchLoop([weak = weak_factory_.GetWeakPtr()](
+                                     std::vector<flutter::PointerData> events) {
+      if (!weak) {
+        FML_LOG(WARNING) << "PlatformView use-after-free attempted. Ignoring.";
+        return;
+      }
 
-    if (events.size() == 0) {
-      return;  // No work, bounce out.
-    }
+      if (events.size() == 0) {
+        return;  // No work, bounce out.
+      }
 
-    // If pixel ratio hasn't been set, use a default value of 1.
-    const float pixel_ratio = weak->view_pixel_ratio_.value_or(1.f);
-    auto packet = std::make_unique<flutter::PointerDataPacket>(events.size());
-    for (size_t i = 0; i < events.size(); ++i) {
-      auto& event = events[i];
-      // Translate logical to physical coordinates, as per flutter::PointerData
-      // contract. Done here because pixel ratio comes from the graphics API.
-      event.physical_x = event.physical_x * pixel_ratio;
-      event.physical_y = event.physical_y * pixel_ratio;
-      packet->SetPointerData(i, event);
-    }
-    weak->DispatchPointerDataPacket(std::move(packet));
-  });
+      // If pixel ratio hasn't been set, use a default value of 1.
+      const float pixel_ratio = weak->view_pixel_ratio_.value_or(1.f);
+      auto packet = std::make_unique<flutter::PointerDataPacket>(events.size());
+      for (size_t i = 0; i < events.size(); ++i) {
+        auto& event = events[i];
+        // Translate logical to physical coordinates, as per
+        // flutter::PointerData contract. Done here because pixel ratio comes
+        // from the graphics API.
+        event.physical_x = event.physical_x * pixel_ratio;
+        event.physical_y = event.physical_y * pixel_ratio;
+        packet->SetPointerData(i, event);
+      }
+      weak->DispatchPointerDataPacket(std::move(packet));
+    });
+  }
 
   // Finally! Register the native platform message handlers.
   RegisterPlatformMessageHandlers();
@@ -365,18 +369,23 @@ bool PlatformView::OnHandlePointerEvent(
       break;
     case flutter::PointerData::Change::kAdd:
       if (down_pointers_.count(pointer_data.device) != 0) {
-        FML_DLOG(ERROR) << "Received add event for down pointer.";
+        FML_LOG(ERROR) << "Received add event for down pointer.";
       }
       break;
     case flutter::PointerData::Change::kRemove:
       if (down_pointers_.count(pointer_data.device) != 0) {
-        FML_DLOG(ERROR) << "Received remove event for down pointer.";
+        FML_LOG(ERROR) << "Received remove event for down pointer.";
       }
       break;
     case flutter::PointerData::Change::kHover:
       if (down_pointers_.count(pointer_data.device) != 0) {
-        FML_DLOG(ERROR) << "Received hover event for down pointer.";
+        FML_LOG(ERROR) << "Received hover event for down pointer.";
       }
+      break;
+    case flutter::PointerData::Change::kPanZoomStart:
+    case flutter::PointerData::Change::kPanZoomUpdate:
+    case flutter::PointerData::Change::kPanZoomEnd:
+      FML_DLOG(ERROR) << "Unexpectedly received pointer pan/zoom event";
       break;
   }
 
@@ -406,7 +415,7 @@ void PlatformView::OnKeyEvent(
       break;
   }
   if (type == nullptr) {
-    FML_DLOG(ERROR) << "Unknown key event phase.";
+    FML_LOG(ERROR) << "Unknown key event phase.";
     callback(fuchsia::ui::input3::KeyEventStatus::NOT_HANDLED);
     return;
   }
@@ -436,7 +445,7 @@ void PlatformView::OnKeyEvent(
 }
 
 void PlatformView::ActivateIme() {
-  DEBUG_CHECK(last_text_state_, LOG_TAG, "");
+  DEBUG_CHECK(last_text_state_ != nullptr, LOG_TAG, "");
 
   text_sync_service_->GetInputMethodEditor(
       fuchsia::ui::input::KeyboardType::TEXT,       // keyboard type
@@ -488,7 +497,7 @@ void PlatformView::HandlePlatformMessage(
     if (!already_errored) {
       FML_LOG(INFO)
           << "Platform view received message on channel '" << message->channel()
-          << "' with no registered handler. And empty response will be "
+          << "' with no registered handler. An empty response will be "
              "generated. Please implement the native message handler. This "
              "message will appear only once per channel.";
       unregistered_channels_.insert(channel);
@@ -653,8 +662,8 @@ bool PlatformView::HandleFlutterTextInputChannelPlatformMessage(
     last_text_state_ = nullptr;
     DeactivateIme();
   } else {
-    FML_DLOG(ERROR) << "Unknown " << message->channel() << " method "
-                    << method->value.GetString();
+    FML_LOG(ERROR) << "Unknown " << message->channel() << " method "
+                   << method->value.GetString();
   }
   // Complete with an empty response.
   return false;
@@ -827,7 +836,7 @@ bool PlatformView::HandleFlutterPlatformViewsChannelPlatformMessage(
   } else if (method.rfind("View.focus", 0) == 0) {
     return focus_delegate_->HandlePlatformMessage(root, message->response());
   } else {
-    FML_DLOG(ERROR) << "Unknown " << message->channel() << " method " << method;
+    FML_LOG(ERROR) << "Unknown " << message->channel() << " method " << method;
   }
   // Complete with an empty response by default.
   return false;

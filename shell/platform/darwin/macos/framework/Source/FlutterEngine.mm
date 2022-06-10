@@ -6,15 +6,19 @@
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterEngine_Internal.h"
 
 #include <algorithm>
+#include <iostream>
 #include <vector>
 
 #import "flutter/shell/platform/darwin/macos/framework/Source/AccessibilityBridgeMacDelegate.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterDartProject_Internal.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterExternalTextureGL.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterGLCompositor.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterMenuPlugin.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterMetalCompositor.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterMetalRenderer.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterMouseCursorPlugin.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterOpenGLRenderer.h"
+#import "flutter/shell/platform/darwin/macos/framework/Source/FlutterPlatformViewController.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterRenderingBackend.h"
 #import "flutter/shell/platform/darwin/macos/framework/Source/FlutterViewController_Internal.h"
 #include "flutter/shell/platform/embedder/embedder.h"
@@ -32,6 +36,14 @@ static FlutterLocale FlutterLocaleFromNSLocale(NSLocale* locale) {
   flutterLocale.variant_code = [[locale objectForKey:NSLocaleVariantCode] UTF8String];
   return flutterLocale;
 }
+
+/// The private notification for voice over.
+static NSString* const kEnhancedUserInterfaceNotification =
+    @"NSApplicationDidChangeAccessibilityEnhancedUserInterfaceNotification";
+static NSString* const kEnhancedUserInterfaceKey = @"AXEnhancedUserInterface";
+
+/// Clipboard plain text format.
+constexpr char kTextPlainFormat[] = "text/plain";
 
 #pragma mark -
 
@@ -95,6 +107,16 @@ static FlutterLocale FlutterLocaleFromNSLocale(NSLocale* locale) {
  */
 - (void)loadAOTData:(NSString*)assetsDir;
 
+/**
+ * Creates a platform view channel and sets up the method handler.
+ */
+- (void)setUpPlatformViewChannel;
+
+/**
+ * Handles messages received from the Flutter engine on the _*Channel channels.
+ */
+- (void)handleMethodCall:(FlutterMethodCall*)call result:(FlutterResult)result;
+
 @end
 
 #pragma mark -
@@ -145,6 +167,11 @@ static FlutterLocale FlutterLocaleFromNSLocale(NSLocale* locale) {
   }];
 }
 
+- (void)registerViewFactory:(nonnull NSObject<FlutterPlatformViewFactory>*)factory
+                     withId:(nonnull NSString*)factoryId {
+  [[_flutterEngine platformViewController] registerViewFactory:factory withId:factoryId];
+}
+
 @end
 
 // Callbacks provided to the engine. See the called methods for documentation.
@@ -186,6 +213,20 @@ static void OnPlatformMessage(const FlutterPlatformMessage* message, FlutterEngi
 
   // FlutterCompositor is copied and used in embedder.cc.
   FlutterCompositor _compositor;
+
+  // Method channel for platform view functions. These functions include creating, disposing and
+  // mutating a platform view.
+  FlutterMethodChannel* _platformViewsChannel;
+
+  // Used to support creation and deletion of platform views and registering platform view
+  // factories. Lifecycle is tied to the engine.
+  FlutterPlatformViewController* _platformViewController;
+
+  // A message channel for sending user settings to the flutter engine.
+  FlutterBasicMessageChannel* _settingsChannel;
+
+  // A method channel for miscellaneous platform functionality.
+  FlutterMethodChannel* _platformChannel;
 }
 
 - (instancetype)initWithName:(NSString*)labelPrefix project:(FlutterDartProject*)project {
@@ -219,6 +260,10 @@ static void OnPlatformMessage(const FlutterPlatformMessage* message, FlutterEngi
                              name:NSCurrentLocaleDidChangeNotification
                            object:nil];
 
+  _platformViewController = [[FlutterPlatformViewController alloc] init];
+  [self setUpPlatformViewChannel];
+  [self setUpNotificationCenterListeners];
+
   return self;
 }
 
@@ -239,13 +284,11 @@ static void OnPlatformMessage(const FlutterPlatformMessage* message, FlutterEngi
     return NO;
   }
 
-  // TODO(stuartmorgan): Move internal channel registration from FlutterViewController to here.
+  [self addInternalPlugins];
 
-  // FlutterProjectArgs is expecting a full argv, so when processing it for
-  // flags the first item is treated as the executable and ignored. Add a dummy
-  // value so that all provided arguments are used.
+  // The first argument of argv is required to be the executable name.
+  std::vector<const char*> argv = {[self.executableName UTF8String]};
   std::vector<std::string> switches = _project.switches;
-  std::vector<const char*> argv = {"placeholder"};
   std::transform(switches.begin(), switches.end(), std::back_inserter(argv),
                  [](const std::string& arg) -> const char* { return arg.c_str(); });
 
@@ -259,7 +302,7 @@ static void OnPlatformMessage(const FlutterPlatformMessage* message, FlutterEngi
   flutterArguments.assets_path = _project.assetsPath.UTF8String;
   flutterArguments.icu_data_path = _project.ICUDataPath.UTF8String;
   flutterArguments.command_line_argc = static_cast<int>(argv.size());
-  flutterArguments.command_line_argv = argv.size() > 0 ? argv.data() : nullptr;
+  flutterArguments.command_line_argv = argv.empty() ? nullptr : argv.data();
   flutterArguments.platform_message_callback = (FlutterPlatformMessageCallback)OnPlatformMessage;
   flutterArguments.update_semantics_node_callback = [](const FlutterSemanticsNode* node,
                                                        void* user_data) {
@@ -276,6 +319,13 @@ static void OnPlatformMessage(const FlutterPlatformMessage* message, FlutterEngi
   flutterArguments.dart_entrypoint_argc = dartEntrypointArgs.size();
   flutterArguments.dart_entrypoint_argv = dartEntrypointArgs.data();
   flutterArguments.root_isolate_create_callback = _project.rootIsolateCreateCallback;
+  flutterArguments.log_message_callback = [](const char* tag, const char* message,
+                                             void* user_data) {
+    if (tag && tag[0]) {
+      std::cout << tag << ": ";
+    }
+    std::cout << message << std::endl;
+  };
 
   static size_t sTaskRunnerIdentifiers = 0;
   const FlutterTaskRunnerDescription cocoa_task_runner_description = {
@@ -326,6 +376,9 @@ static void OnPlatformMessage(const FlutterPlatformMessage* message, FlutterEngi
   [self sendUserLocales];
   [self updateWindowMetrics];
   [self updateDisplayConfig];
+  // Send the initial user settings such as brightness and text scale factor
+  // to the engine.
+  [self sendInitialSettings];
   return YES;
 }
 
@@ -383,8 +436,8 @@ static void OnPlatformMessage(const FlutterPlatformMessage* message, FlutterEngi
 
   if ([FlutterRenderingBackend renderUsingMetal]) {
     FlutterMetalRenderer* metalRenderer = reinterpret_cast<FlutterMetalRenderer*>(_renderer);
-    _macOSCompositor =
-        std::make_unique<flutter::FlutterMetalCompositor>(_viewController, metalRenderer.device);
+    _macOSCompositor = std::make_unique<flutter::FlutterMetalCompositor>(
+        _viewController, _platformViewController, metalRenderer.device);
     _macOSCompositor->SetPresentCallback([weakSelf](bool has_flutter_content) {
       if (has_flutter_content) {
         FlutterMetalRenderer* metalRenderer =
@@ -479,12 +532,38 @@ static void OnPlatformMessage(const FlutterPlatformMessage* message, FlutterEngi
   CVDisplayLinkRelease(displayLinkRef);
 }
 
+- (void)onSettingsChanged:(NSNotification*)notification {
+  // TODO(jonahwilliams): https://github.com/flutter/flutter/issues/32015.
+  NSString* brightness =
+      [[NSUserDefaults standardUserDefaults] stringForKey:@"AppleInterfaceStyle"];
+  [_settingsChannel sendMessage:@{
+    @"platformBrightness" : [brightness isEqualToString:@"Dark"] ? @"dark" : @"light",
+    // TODO(jonahwilliams): https://github.com/flutter/flutter/issues/32006.
+    @"textScaleFactor" : @1.0,
+    @"alwaysUse24HourFormat" : @false
+  }];
+}
+
+- (void)sendInitialSettings {
+  // TODO(jonahwilliams): https://github.com/flutter/flutter/issues/32015.
+  [[NSDistributedNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(onSettingsChanged:)
+             name:@"AppleInterfaceThemeChangedNotification"
+           object:nil];
+  [self onSettingsChanged:nil];
+}
+
 - (FlutterEngineProcTable&)embedderAPI {
   return _embedderAPI;
 }
 
 - (std::weak_ptr<flutter::AccessibilityBridge>)accessibilityBridge {
   return _bridge;
+}
+
+- (nonnull NSString*)executableName {
+  return [[[NSProcessInfo processInfo] arguments] firstObject] ?: @"Flutter";
 }
 
 - (void)updateWindowMetrics {
@@ -539,6 +618,10 @@ static void OnPlatformMessage(const FlutterPlatformMessage* message, FlutterEngi
                        toTarget:(uint16_t)target
                        withData:(fml::MallocMapping)data {
   _embedderAPI.DispatchSemanticsAction(_engine, target, action, data.GetMapping(), data.GetSize());
+}
+
+- (FlutterPlatformViewController*)platformViewController {
+  return _platformViewController;
 }
 
 #pragma mark - Private methods
@@ -628,6 +711,109 @@ static void OnPlatformMessage(const FlutterPlatformMessage* message, FlutterEngi
     NSLog(@"Failed to shut down Flutter engine: error %d", result);
   }
   _engine = nullptr;
+}
+
+- (void)setUpPlatformViewChannel {
+  _platformViewsChannel =
+      [FlutterMethodChannel methodChannelWithName:@"flutter/platform_views"
+                                  binaryMessenger:self.binaryMessenger
+                                            codec:[FlutterStandardMethodCodec sharedInstance]];
+
+  __weak FlutterEngine* weakSelf = self;
+  [_platformViewsChannel setMethodCallHandler:^(FlutterMethodCall* call, FlutterResult result) {
+    [[weakSelf platformViewController] handleMethodCall:call result:result];
+  }];
+}
+
+- (void)setUpNotificationCenterListeners {
+  NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+  // macOS fires this private message when VoiceOver turns on or off.
+  [center addObserver:self
+             selector:@selector(onAccessibilityStatusChanged:)
+                 name:kEnhancedUserInterfaceNotification
+               object:nil];
+  [center addObserver:self
+             selector:@selector(applicationWillTerminate:)
+                 name:NSApplicationWillTerminateNotification
+               object:nil];
+}
+
+- (void)addInternalPlugins {
+  __weak FlutterEngine* weakSelf = self;
+  [FlutterMouseCursorPlugin registerWithRegistrar:[self registrarForPlugin:@"mousecursor"]];
+  [FlutterMenuPlugin registerWithRegistrar:[self registrarForPlugin:@"menu"]];
+  _settingsChannel =
+      [FlutterBasicMessageChannel messageChannelWithName:@"flutter/settings"
+                                         binaryMessenger:self.binaryMessenger
+                                                   codec:[FlutterJSONMessageCodec sharedInstance]];
+  _platformChannel =
+      [FlutterMethodChannel methodChannelWithName:@"flutter/platform"
+                                  binaryMessenger:self.binaryMessenger
+                                            codec:[FlutterJSONMethodCodec sharedInstance]];
+  [_platformChannel setMethodCallHandler:^(FlutterMethodCall* call, FlutterResult result) {
+    [weakSelf handleMethodCall:call result:result];
+  }];
+}
+
+- (void)applicationWillTerminate:(NSNotification*)notification {
+  [self shutDownEngine];
+}
+
+- (void)onAccessibilityStatusChanged:(NSNotification*)notification {
+  BOOL enabled = [notification.userInfo[kEnhancedUserInterfaceKey] boolValue];
+  [self.viewController onAccessibilityStatusChanged:enabled];
+  self.semanticsEnabled = enabled;
+}
+
+- (void)handleMethodCall:(FlutterMethodCall*)call result:(FlutterResult)result {
+  if ([call.method isEqualToString:@"SystemNavigator.pop"]) {
+    [NSApp terminate:self];
+    result(nil);
+  } else if ([call.method isEqualToString:@"SystemSound.play"]) {
+    [self playSystemSound:call.arguments];
+    result(nil);
+  } else if ([call.method isEqualToString:@"Clipboard.getData"]) {
+    result([self getClipboardData:call.arguments]);
+  } else if ([call.method isEqualToString:@"Clipboard.setData"]) {
+    [self setClipboardData:call.arguments];
+    result(nil);
+  } else if ([call.method isEqualToString:@"Clipboard.hasStrings"]) {
+    result(@{@"value" : @([self clipboardHasStrings])});
+  } else {
+    result(FlutterMethodNotImplemented);
+  }
+}
+
+- (void)playSystemSound:(NSString*)soundType {
+  if ([soundType isEqualToString:@"SystemSoundType.alert"]) {
+    NSBeep();
+  }
+}
+
+- (NSDictionary*)getClipboardData:(NSString*)format {
+  NSPasteboard* pasteboard = self.pasteboard;
+  if ([format isEqualToString:@(kTextPlainFormat)]) {
+    NSString* stringInPasteboard = [pasteboard stringForType:NSPasteboardTypeString];
+    return stringInPasteboard == nil ? nil : @{@"text" : stringInPasteboard};
+  }
+  return nil;
+}
+
+- (void)setClipboardData:(NSDictionary*)data {
+  NSPasteboard* pasteboard = self.pasteboard;
+  NSString* text = data[@"text"];
+  [pasteboard clearContents];
+  if (text && ![text isEqual:[NSNull null]]) {
+    [pasteboard setString:text forType:NSPasteboardTypeString];
+  }
+}
+
+- (BOOL)clipboardHasStrings {
+  return [self.pasteboard stringForType:NSPasteboardTypeString].length > 0;
+}
+
+- (NSPasteboard*)pasteboard {
+  return [NSPasteboard generalPasteboard];
 }
 
 #pragma mark - FlutterBinaryMessenger
@@ -781,20 +967,22 @@ static void OnPlatformMessage(const FlutterPlatformMessage* message, FlutterEngi
 
 #pragma mark - Task runner integration
 
-- (void)postMainThreadTask:(FlutterTask)task targetTimeInNanoseconds:(uint64_t)targetTime {
-  const auto engine_time = _embedderAPI.GetCurrentTime();
-
-  __weak FlutterEngine* weak_self = self;
-  auto worker = ^{
-    FlutterEngine* strong_self = weak_self;
-    if (strong_self && strong_self->_engine) {
-      auto result = _embedderAPI.RunTask(strong_self->_engine, &task);
-      if (result != kSuccess) {
-        NSLog(@"Could not post a task to the Flutter engine.");
-      }
+- (void)runTaskOnEmbedder:(FlutterTask)task {
+  if (_engine) {
+    auto result = _embedderAPI.RunTask(_engine, &task);
+    if (result != kSuccess) {
+      NSLog(@"Could not post a task to the Flutter engine.");
     }
+  }
+}
+
+- (void)postMainThreadTask:(FlutterTask)task targetTimeInNanoseconds:(uint64_t)targetTime {
+  __weak FlutterEngine* weakSelf = self;
+  auto worker = ^{
+    [weakSelf runTaskOnEmbedder:task];
   };
 
+  const auto engine_time = _embedderAPI.GetCurrentTime();
   if (targetTime <= engine_time) {
     dispatch_async(dispatch_get_main_queue(), worker);
 

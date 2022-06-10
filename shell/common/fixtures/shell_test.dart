@@ -13,6 +13,28 @@ void nativeReportTimingsCallback(List<int> timings) native 'NativeReportTimingsC
 void nativeOnBeginFrame(int microseconds) native 'NativeOnBeginFrame';
 void nativeOnPointerDataPacket(List<int> sequences) native 'NativeOnPointerDataPacket';
 
+@pragma('vm:entry-point')
+void onErrorA() {
+  PlatformDispatcher.instance.onError = (Object error, StackTrace? stack) {
+    notifyErrorA(error.toString());
+    return true;
+  };
+  Future<void>.delayed(const Duration(seconds: 2)).then((_) {
+    throw Exception('I should be coming from A');
+  });
+}
+
+@pragma('vm:entry-point')
+void onErrorB() {
+  PlatformDispatcher.instance.onError = (Object error, StackTrace? stack) {
+    notifyErrorB(error.toString());
+    return true;
+  };
+  throw Exception('I should be coming from B');
+}
+
+void notifyErrorA(String message) native 'NotifyErrorA';
+void notifyErrorB(String message) native 'NotifyErrorB';
 
 @pragma('vm:entry-point')
 void drawFrames() {
@@ -55,6 +77,7 @@ void onBeginFrameMain() {
   PlatformDispatcher.instance.onBeginFrame = (Duration beginTime) {
     nativeOnBeginFrame(beginTime.inMicroseconds);
   };
+  PlatformDispatcher.instance.scheduleFrame();
 }
 
 @pragma('vm:entry-point')
@@ -253,11 +276,48 @@ void notifyNativeWhenEngineRun(bool success) native 'NotifyNativeWhenEngineRun';
 void notifyNativeWhenEngineSpawn(bool success) native 'NotifyNativeWhenEngineSpawn';
 
 @pragma('vm:entry-point')
-void canRecieveArgumentsWhenEngineRun(List<String> args) {
+void canReceiveArgumentsWhenEngineRun(List<String> args) {
   notifyNativeWhenEngineRun(args.length == 2 && args[0] == 'foo' && args[1] == 'bar');
 }
 
 @pragma('vm:entry-point')
-void canRecieveArgumentsWhenEngineSpawn(List<String> args) {
+void canReceiveArgumentsWhenEngineSpawn(List<String> args) {
   notifyNativeWhenEngineSpawn(args.length == 2 && args[0] == 'arg1' && args[1] == 'arg2');
+}
+
+@pragma('vm:entry-point')
+void onBeginFrameWithNotifyNativeMain() {
+  PlatformDispatcher.instance.onBeginFrame = (Duration beginTime) {
+    nativeOnBeginFrame(beginTime.inMicroseconds);
+  };
+  notifyNative();
+}
+
+@pragma('vm:entry-point')
+void frameCallback(_Image, int) {
+  // It is used as the frame callback of 'MultiFrameCodec' in the test
+  // 'ItDoesNotCrashThatSkiaUnrefQueueDrainAfterIOManagerReset'.
+  // The test is a regression test and doesn't care about images, so it is empty.
+}
+
+Picture CreateRedBox(Size size) {
+  Paint paint = Paint()
+    ..color = Color.fromARGB(255, 255, 0, 0)
+    ..style = PaintingStyle.fill;
+  PictureRecorder baseRecorder = PictureRecorder();
+  Canvas canvas = Canvas(baseRecorder);
+  canvas.drawRect(Rect.fromLTRB(0.0, 0.0, size.width, size.height), paint);
+  return baseRecorder.endRecording();
+}
+
+@pragma('vm:entry-point')
+void scene_with_red_box() {
+  PlatformDispatcher.instance.onBeginFrame = (Duration duration) {
+    SceneBuilder builder = SceneBuilder();
+    builder.pushOffset(0.0, 0.0);
+    builder.addPicture(Offset(0.0, 0.0), CreateRedBox(Size(2.0, 2.0)));
+    builder.pop();
+    PlatformDispatcher.instance.views.first.render(builder.build());
+  };
+  PlatformDispatcher.instance.scheduleFrame();
 }

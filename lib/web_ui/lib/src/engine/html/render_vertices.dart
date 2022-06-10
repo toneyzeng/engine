@@ -3,13 +3,14 @@
 // found in the LICENSE file.
 
 import 'dart:html' as html;
-import 'dart:js_util' as js_util;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:ui/ui.dart' as ui;
 
 import '../browser_detection.dart';
+import '../dom.dart';
+import '../safe_browser_api.dart';
 import '../util.dart';
 import '../vector_math.dart';
 import 'painting.dart';
@@ -17,7 +18,6 @@ import 'shaders/image_shader.dart';
 import 'shaders/normalized_gradient.dart';
 import 'shaders/shader_builder.dart';
 import 'shaders/vertex_shaders.dart';
-import 'shaders/webgl_context.dart';
 
 GlRenderer? glRenderer;
 
@@ -71,14 +71,9 @@ void initWebGl() {
   glRenderer ??= _WebGlRenderer();
 }
 
-void disposeWebGl() {
-  GlContextCache.dispose();
-  glRenderer = null;
-}
-
 abstract class GlRenderer {
   void drawVertices(
-      html.CanvasRenderingContext2D? context,
+      DomCanvasRenderingContext2D? context,
       int canvasWidthInPixels,
       int canvasHeightInPixels,
       Matrix4 transform,
@@ -97,7 +92,7 @@ abstract class GlRenderer {
       int widthInPixels,
       int heightInPixels);
 
-  void drawHairline(html.CanvasRenderingContext2D? _ctx, Float32List positions);
+  void drawHairline(DomCanvasRenderingContext2D? _ctx, Float32List positions);
 }
 
 /// Treeshakeable backend for rendering webgl on canvas.
@@ -107,7 +102,7 @@ abstract class GlRenderer {
 class _WebGlRenderer implements GlRenderer {
   @override
   void drawVertices(
-      html.CanvasRenderingContext2D? context,
+      DomCanvasRenderingContext2D? context,
       int canvasWidthInPixels,
       int canvasHeightInPixels,
       Matrix4 transform,
@@ -204,15 +199,15 @@ class _WebGlRenderer implements GlRenderer {
     bufferVertexData(gl, positions, 1.0);
 
     // Setup data format for attribute.
-    // ignore: implicit_dynamic_function
-    js_util.callMethod(gl.glContext, 'vertexAttribPointer', <dynamic>[
+    vertexAttribPointerGlContext(
+      gl.glContext,
       positionAttributeLocation,
       2,
       gl.kFloat,
       false,
       0,
       0,
-    ]);
+    );
 
     final int vertexCount = positions.length ~/ 2;
     Object? texture;
@@ -234,9 +229,15 @@ class _WebGlRenderer implements GlRenderer {
         gl.bufferData(vertices.colors, gl.kStaticDraw);
       }
       final Object colorLoc = gl.getAttributeLocation(glProgram.program, 'color');
-      // ignore: implicit_dynamic_function
-      js_util.callMethod(gl.glContext, 'vertexAttribPointer',
-          <dynamic>[colorLoc, 4, gl.kUnsignedByte, true, 0, 0]);
+      vertexAttribPointerGlContext(
+        gl.glContext,
+        colorLoc,
+        4,
+        gl.kUnsignedByte,
+        true,
+        0,
+        0,
+      );
       gl.enableVertexAttribArray(colorLoc);
     } else {
       // Copy image it to the texture.
@@ -299,7 +300,7 @@ class _WebGlRenderer implements GlRenderer {
 
     context!.save();
     context.resetTransform();
-    gl.drawImage(context, offsetX, offsetY);
+    gl.drawImage(context as html.CanvasRenderingContext2D, offsetX, offsetY);
     context.restore();
   }
 
@@ -312,7 +313,7 @@ class _WebGlRenderer implements GlRenderer {
       NormalizedGradient gradient, int widthInPixels, int heightInPixels) {
     drawRectToGl(
         targetRect, gl, glProgram, gradient, widthInPixels, heightInPixels);
-    final Object? image = gl.readPatternData();
+    final Object? image = gl.readPatternData(gradient.isOpaque);
     gl.bindArrayBuffer(null);
     gl.bindElementArrayBuffer(null);
     return image;
@@ -376,9 +377,15 @@ class _WebGlRenderer implements GlRenderer {
     gl.bindArrayBuffer(positionsBuffer);
     gl.bufferData(vertices, gl.kStaticDraw);
     // Point an attribute to the currently bound vertex buffer object.
-    // ignore: implicit_dynamic_function
-    js_util.callMethod(gl.glContext, 'vertexAttribPointer',
-        <dynamic>[0, 2, gl.kFloat, false, 0, 0]);
+    vertexAttribPointerGlContext(
+      gl.glContext,
+      0,
+      2,
+      gl.kFloat,
+      false,
+      0,
+      0,
+    );
     gl.enableVertexAttribArray(0);
 
     // Setup color buffer.
@@ -392,9 +399,15 @@ class _WebGlRenderer implements GlRenderer {
       0xFF00FFFF,
     ]);
     gl.bufferData(colors, gl.kStaticDraw);
-    // ignore: implicit_dynamic_function
-    js_util.callMethod(gl.glContext, 'vertexAttribPointer',
-        <dynamic>[1, 4, gl.kUnsignedByte, true, 0, 0]);
+    vertexAttribPointerGlContext(
+      gl.glContext,
+      1,
+      4,
+      gl.kUnsignedByte,
+      true,
+      0,
+      0,
+    );
     gl.enableVertexAttribArray(1);
 
     final Object? indexBuffer = gl.createBuffer();
@@ -434,7 +447,7 @@ class _WebGlRenderer implements GlRenderer {
 
   @override
   void drawHairline(
-      html.CanvasRenderingContext2D? _ctx, Float32List positions) {
+      DomCanvasRenderingContext2D? _ctx, Float32List positions) {
     assert(positions != null); // ignore: unnecessary_null_comparison
     final int pointCount = positions.length ~/ 2;
     _ctx!.lineWidth = 1.0;

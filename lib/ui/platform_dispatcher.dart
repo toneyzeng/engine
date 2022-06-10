@@ -53,6 +53,16 @@ typedef _SetNeedsReportTimingsFunc = void Function(bool value);
 /// Signature for [PlatformDispatcher.onConfigurationChanged].
 typedef PlatformConfigurationChangedCallback = void Function(PlatformConfiguration configuration);
 
+/// Signature for [PlatformDispatcher.onError].
+///
+/// If this method returns false, the engine may use some fallback method to
+/// provide information about the error.
+///
+/// After calling this method, the process or the VM may terminate. Some severe
+/// unhandled errors may not be able to call this method either, such as Dart
+/// compilation errors or process terminating errors.
+typedef ErrorCallback = bool Function(Object exception, StackTrace stackTrace);
+
 // A gesture setting value that indicates it has not been set by the engine.
 const double _kUnsetGestureSetting = -1.0;
 
@@ -341,7 +351,7 @@ class PlatformDispatcher {
   //  * pointer_data.cc
   //  * pointer.dart
   //  * AndroidTouchProcessor.java
-  static const int _kPointerDataFieldCount = 29;
+  static const int _kPointerDataFieldCount = 35;
 
   static PointerDataPacket _unpackPointerDataPacket(ByteData packet) {
     const int kStride = Int64List.bytesPerElement;
@@ -381,6 +391,12 @@ class PlatformDispatcher {
         platformData: packet.getInt64(kStride * offset++, _kFakeHostEndian),
         scrollDeltaX: packet.getFloat64(kStride * offset++, _kFakeHostEndian),
         scrollDeltaY: packet.getFloat64(kStride * offset++, _kFakeHostEndian),
+        panX: packet.getFloat64(kStride * offset++, _kFakeHostEndian),
+        panY: packet.getFloat64(kStride * offset++, _kFakeHostEndian),
+        panDeltaX: packet.getFloat64(kStride * offset++, _kFakeHostEndian),
+        panDeltaY: packet.getFloat64(kStride * offset++, _kFakeHostEndian),
+        scale: packet.getFloat64(kStride * offset++, _kFakeHostEndian),
+        rotation: packet.getFloat64(kStride * offset++, _kFakeHostEndian),
       ));
       assert(offset == (i + 1) * _kPointerDataFieldCount);
     }
@@ -826,6 +842,24 @@ class PlatformDispatcher {
     _onTextScaleFactorChangedZone = Zone.current;
   }
 
+  /// Whether the spell check service is supported on the current platform.
+  ///
+  /// This option is used by [EditableTextState] to define its
+  /// [SpellCheckConfiguration] when a default spell check service
+  /// is requested.
+  bool get nativeSpellCheckServiceDefined => _nativeSpellCheckServiceDefined;
+  bool _nativeSpellCheckServiceDefined = false;
+
+  /// Whether briefly displaying the characters as you type in obscured text
+  /// fields is enabled in system settings.
+  ///
+  /// See also:
+  ///
+  ///  * [EditableText.obscureText], which when set to true hides the text in
+  ///    the text field.
+  bool get brieflyShowPassword => _brieflyShowPassword;
+  bool _brieflyShowPassword = true;
+
   /// The setting indicating the current brightness mode of the host platform.
   /// If the platform has no preference, [platformBrightness] defaults to
   /// [Brightness.light].
@@ -848,30 +882,65 @@ class PlatformDispatcher {
     _onPlatformBrightnessChangedZone = Zone.current;
   }
 
+  /// The setting indicating the current system font of the host platform.
+  String? get systemFontFamily => configuration.systemFontFamily;
+
+  /// A callback that is invoked whenever [systemFontFamily] changes value.
+  ///
+  /// The framework invokes this callback in the same zone in which the callback
+  /// was set.
+  ///
+  /// See also:
+  ///
+  ///  * [WidgetsBindingObserver], for a mechanism at the widgets layer to
+  ///    observe when this callback is invoked.
+  VoidCallback? get onSystemFontFamilyChanged => _onSystemFontFamilyChanged;
+  VoidCallback? _onSystemFontFamilyChanged;
+  Zone _onSystemFontFamilyChangedZone = Zone.root;
+  set onSystemFontFamilyChanged(VoidCallback? callback) {
+    _onSystemFontFamilyChanged = callback;
+    _onSystemFontFamilyChangedZone = Zone.current;
+  }
+
   // Called from the engine, via hooks.dart
   void _updateUserSettingsData(String jsonData) {
-    final Map<String, dynamic> data = json.decode(jsonData) as Map<String, dynamic>;
+    final Map<String, Object?> data = json.decode(jsonData) as Map<String, Object?>;
     if (data.isEmpty) {
       return;
     }
 
-    final double textScaleFactor = (data['textScaleFactor'] as num).toDouble();
-    final bool alwaysUse24HourFormat = data['alwaysUse24HourFormat'] as bool;
+    final double textScaleFactor = (data['textScaleFactor']! as num).toDouble();
+    final bool alwaysUse24HourFormat = data['alwaysUse24HourFormat']! as bool;
+    final bool? nativeSpellCheckServiceDefined = data['nativeSpellCheckServiceDefined'] as bool?;
+    if (nativeSpellCheckServiceDefined != null) {
+      _nativeSpellCheckServiceDefined = nativeSpellCheckServiceDefined;
+    } else {
+      _nativeSpellCheckServiceDefined = false;
+    }
+    // This field is optional.
+    final bool? brieflyShowPassword = data['brieflyShowPassword'] as bool?;
+    if (brieflyShowPassword != null) {
+      _brieflyShowPassword = brieflyShowPassword;
+    }
     final Brightness platformBrightness =
-    data['platformBrightness'] as String == 'dark' ? Brightness.dark : Brightness.light;
+    data['platformBrightness']! as String == 'dark' ? Brightness.dark : Brightness.light;
+    final String? systemFontFamily = data['systemFontFamily'] as String?;
     final PlatformConfiguration previousConfiguration = configuration;
     final bool platformBrightnessChanged =
         previousConfiguration.platformBrightness != platformBrightness;
     final bool textScaleFactorChanged = previousConfiguration.textScaleFactor != textScaleFactor;
     final bool alwaysUse24HourFormatChanged =
         previousConfiguration.alwaysUse24HourFormat != alwaysUse24HourFormat;
-    if (!platformBrightnessChanged && !textScaleFactorChanged && !alwaysUse24HourFormatChanged) {
+    final bool systemFontFamilyChanged =
+        previousConfiguration.systemFontFamily != systemFontFamily;
+    if (!platformBrightnessChanged && !textScaleFactorChanged && !alwaysUse24HourFormatChanged && !systemFontFamilyChanged) {
       return;
     }
     _configuration = previousConfiguration.copyWith(
       textScaleFactor: textScaleFactor,
       alwaysUse24HourFormat: alwaysUse24HourFormat,
       platformBrightness: platformBrightness,
+      systemFontFamily: systemFontFamily,
     );
     _invoke(onPlatformConfigurationChanged, _onPlatformConfigurationChangedZone);
     if (textScaleFactorChanged) {
@@ -879,6 +948,9 @@ class PlatformDispatcher {
     }
     if (platformBrightnessChanged) {
       _invoke(onPlatformBrightnessChanged, _onPlatformBrightnessChangedZone);
+    }
+    if (systemFontFamilyChanged) {
+      _invoke(onSystemFontFamilyChanged, _onSystemFontFamilyChangedZone);
     }
   }
 
@@ -964,6 +1036,50 @@ class PlatformDispatcher {
     );
   }
 
+  ErrorCallback? _onError;
+  Zone? _onErrorZone;
+
+  /// A callback that is invoked when an unhandled error occurs in the root
+  /// isolate.
+  ///
+  /// This callback must return `true` if it has handled the error. Otherwise,
+  /// it must return `false` and a fallback mechanism such as printing to stderr
+  /// will be used, as configured by the specific platform embedding via
+  /// `Settings::unhandled_exception_callback`.
+  ///
+  /// The VM or the process may exit or become unresponsive after calling this
+  /// callback. The callback will not be called for exceptions that cause the VM
+  /// or process to terminate or become unresponsive before the callback can be
+  /// invoked.
+  ///
+  /// This callback is not directly invoked by errors in child isolates of the
+  /// root isolate. Programs that create new isolates must listen for errors on
+  /// those isolates and forward the errors to the root isolate. An example of
+  /// this can be found in the Flutter framework's `compute` function.
+  ErrorCallback? get onError => _onError;
+  set onError(ErrorCallback? callback) {
+    _onError = callback;
+    _onErrorZone = Zone.current;
+  }
+
+  bool _dispatchError(Object error, StackTrace stackTrace) {
+    if (_onError == null) {
+      return false;
+    }
+    assert(_onErrorZone != null);
+
+    if (identical(_onErrorZone, Zone.current)) {
+      return _onError!(error, stackTrace);
+    } else {
+      try {
+        return _onErrorZone!.runBinary<bool, Object, StackTrace>(_onError!, error, stackTrace);
+      } catch (e, s) {
+        _onErrorZone!.handleUncaughtError(e, s);
+        return false;
+      }
+    }
+  }
+
   /// The route or path that the embedder requested when the application was
   /// launched.
   ///
@@ -1011,6 +1127,7 @@ class PlatformConfiguration {
     this.textScaleFactor = 1.0,
     this.locales = const <Locale>[],
     this.defaultRouteName,
+    this.systemFontFamily,
   });
 
   /// Copy a [PlatformConfiguration] with some fields replaced.
@@ -1022,6 +1139,7 @@ class PlatformConfiguration {
     double? textScaleFactor,
     List<Locale>? locales,
     String? defaultRouteName,
+    String? systemFontFamily,
   }) {
     return PlatformConfiguration(
       accessibilityFeatures: accessibilityFeatures ?? this.accessibilityFeatures,
@@ -1031,6 +1149,7 @@ class PlatformConfiguration {
       textScaleFactor: textScaleFactor ?? this.textScaleFactor,
       locales: locales ?? this.locales,
       defaultRouteName: defaultRouteName ?? this.defaultRouteName,
+      systemFontFamily: systemFontFamily ?? this.systemFontFamily,
     );
   }
 
@@ -1059,6 +1178,9 @@ class PlatformConfiguration {
   /// The route or path that the embedder requested when the application was
   /// launched.
   final String? defaultRouteName;
+
+  /// The system-reported default font family.
+  final String? systemFontFamily;
 }
 
 /// An immutable view configuration.
@@ -1567,7 +1689,7 @@ class DisplayFeature {
   }
 
   @override
-  int get hashCode => hashValues(bounds, type, state);
+  int get hashCode => Object.hash(bounds, type, state);
 
   @override
   String toString() {
@@ -1884,17 +2006,17 @@ class Locale {
     if (other is! Locale) {
       return false;
     }
-    final String? countryCode = _countryCode;
+    final String? thisCountryCode = countryCode;
     final String? otherCountryCode = other.countryCode;
     return other.languageCode == languageCode
         && other.scriptCode == scriptCode // scriptCode cannot be ''
-        && (other.countryCode == countryCode // Treat '' as equal to null.
-            || otherCountryCode != null && otherCountryCode.isEmpty && countryCode == null
-            || countryCode != null && countryCode.isEmpty && other.countryCode == null);
+        && (other.countryCode == thisCountryCode // Treat '' as equal to null.
+            || otherCountryCode != null && otherCountryCode.isEmpty && thisCountryCode == null
+            || thisCountryCode != null && thisCountryCode.isEmpty && other.countryCode == null);
   }
 
   @override
-  int get hashCode => hashValues(languageCode, scriptCode, countryCode == '' ? null : countryCode);
+  int get hashCode => Object.hash(languageCode, scriptCode, countryCode == '' ? null : countryCode);
 
   static Locale? _cachedLocale;
   static String? _cachedLocaleString;

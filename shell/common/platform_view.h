@@ -25,8 +25,13 @@
 #include "flutter/shell/common/platform_message_handler.h"
 #include "flutter/shell/common/pointer_data_dispatcher.h"
 #include "flutter/shell/common/vsync_waiter.h"
-#include "third_party/skia/include/core/SkSize.h"
 #include "third_party/skia/include/gpu/GrDirectContext.h"
+
+namespace impeller {
+
+class Context;
+
+}  // namespace impeller
 
 namespace flutter {
 
@@ -72,6 +77,12 @@ class PlatformView {
     ///             intermediate resources.
     ///
     virtual void OnPlatformViewDestroyed() = 0;
+
+    //--------------------------------------------------------------------------
+    /// @brief      Notifies the delegate that the platform needs to schedule a
+    ///             frame to regenerate the layer tree and redraw the surface.
+    ///
+    virtual void OnPlatformViewScheduleFrame() = 0;
 
     //--------------------------------------------------------------------------
     /// @brief      Notifies the delegate that the specified callback needs to
@@ -303,6 +314,15 @@ class PlatformView {
     virtual void UpdateAssetResolverByType(
         std::unique_ptr<AssetResolver> updated_asset_resolver,
         AssetResolver::AssetResolverType type) = 0;
+
+    //--------------------------------------------------------------------------
+    /// @brief      Called by the platform view on the platform thread to get
+    ///             the settings object associated with the platform view
+    ///             instance.
+    ///
+    /// @return     The settings.
+    ///
+    virtual const Settings& OnPlatformViewGetSettings() const = 0;
   };
 
   //----------------------------------------------------------------------------
@@ -479,6 +499,12 @@ class PlatformView {
   virtual void NotifyDestroyed();
 
   //----------------------------------------------------------------------------
+  /// @brief      Used by embedders to schedule a frame. In response to this
+  ///             call, the framework may need to start generating a new frame.
+  ///
+  void ScheduleFrame();
+
+  //----------------------------------------------------------------------------
   /// @brief      Used by the shell to obtain a Skia GPU context that is capable
   ///             of operating on the IO thread. The context must be in the same
   ///             share-group as the Skia GPU context used on the render thread.
@@ -504,12 +530,14 @@ class PlatformView {
   ///
   virtual sk_sp<GrDirectContext> CreateResourceContext() const;
 
+  virtual std::shared_ptr<impeller::Context> GetImpellerContext() const;
+
   //----------------------------------------------------------------------------
   /// @brief      Used by the shell to notify the embedder that the resource
   ///             context previously obtained via a call to
-  ///             `CreateResourceContext()` is being collected. The embedder is
-  ///             free to collect an platform specific resources associated with
-  ///             this context.
+  ///             `CreateResourceContext()` is being collected. The embedder
+  ///             is free to collect an platform specific resources
+  ///             associated with this context.
   ///
   /// @attention  Unlike all other methods on the platform view, this will be
   ///             called on IO task runner.
@@ -601,8 +629,7 @@ class PlatformView {
 
   //--------------------------------------------------------------------------
   /// @brief      Used by the embedder to notify the rasterizer that it will
-  /// no
-  ///             longer attempt to composite the specified texture within
+  ///             no longer attempt to composite the specified texture within
   ///             the layer tree. This allows the rasterizer to collect
   ///             associated resources.
   ///
@@ -793,9 +820,16 @@ class PlatformView {
   /// @details If this returns `null` that means PlatformMessages should be sent
   /// to the PlatformView.  That is to protect legacy behavior, any embedder
   /// that wants to support executing Platform Channel handlers on background
-  /// threads should be returing a thread-safe PlatformMessageHandler instead.
+  /// threads should be returning a thread-safe PlatformMessageHandler instead.
   virtual std::shared_ptr<PlatformMessageHandler> GetPlatformMessageHandler()
       const;
+
+  //----------------------------------------------------------------------------
+  /// @brief      Get the settings for this platform view instance.
+  ///
+  /// @return     The settings.
+  ///
+  const Settings& GetSettings() const;
 
  protected:
   // This is the only method called on the raster task runner.
@@ -804,7 +838,6 @@ class PlatformView {
   PlatformView::Delegate& delegate_;
   const TaskRunners task_runners_;
   PointerDataPacketConverter pointer_data_packet_converter_;
-  SkISize size_;
   fml::WeakPtrFactory<PlatformView> weak_factory_;  // Must be the last member.
 
  private:

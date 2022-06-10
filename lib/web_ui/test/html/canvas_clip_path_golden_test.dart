@@ -21,11 +21,11 @@ Future<void> testMain() async {
   const double screenHeight = 500.0;
   const Rect screenRect = Rect.fromLTWH(0, 0, screenWidth, screenHeight);
 
-  setUp(() async {
+  setUpAll(() async {
     debugEmulateFlutterTesterEnvironment = true;
     await webOnlyInitializePlatform();
-    webOnlyFontCollection.debugRegisterTestFonts();
-    await webOnlyFontCollection.ensureFontsLoaded();
+    engine.fontCollection.debugRegisterTestFonts();
+    await engine.fontCollection.ensureFontsLoaded();
   });
 
   // Regression test for https://github.com/flutter/flutter/issues/48683
@@ -140,7 +140,6 @@ engine.HtmlImage createTestImage({int width = 200, int height = 150}) {
   ctx.fillRect(2 * width / 3, 0, width / 3, height);
   ctx.fill();
   final html.ImageElement imageElement = html.ImageElement();
-  // ignore: implicit_dynamic_function
-  imageElement.src = js_util.callMethod(canvas, 'toDataURL', <dynamic>[]) as String;
+  imageElement.src = js_util.callMethod<String>(canvas, 'toDataURL', <dynamic>[]);
   return engine.HtmlImage(imageElement, width, height);
 }

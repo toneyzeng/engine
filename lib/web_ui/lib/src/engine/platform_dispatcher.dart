@@ -5,7 +5,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:html' as html;
-import 'dart:js_util' as js_util;
 import 'dart:typed_data';
 
 import 'package:meta/meta.dart';
@@ -16,12 +15,14 @@ import 'canvaskit/initialization.dart';
 import 'canvaskit/layer_scene_builder.dart';
 import 'canvaskit/rasterizer.dart';
 import 'clipboard.dart';
-import 'dom_renderer.dart';
+import 'dom.dart';
+import 'embedder.dart';
 import 'html/scene.dart';
 import 'mouse_cursor.dart';
 import 'platform_views/message_handler.dart';
 import 'plugins.dart';
 import 'profiler.dart';
+import 'safe_browser_api.dart';
 import 'semantics.dart';
 import 'services.dart';
 import 'text_editing/text_editing.dart';
@@ -44,6 +45,7 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
   /// these.
   EnginePlatformDispatcher._() {
     _addBrightnessMediaQueryListener();
+    _addFontSizeObserver();
   }
 
   /// The [EnginePlatformDispatcher] singleton.
@@ -53,8 +55,7 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
 
   /// The current platform configuration.
   @override
-  ui.PlatformConfiguration get configuration => _configuration;
-  ui.PlatformConfiguration _configuration = ui.PlatformConfiguration(
+  ui.PlatformConfiguration configuration = ui.PlatformConfiguration(
     locales: parseBrowserLanguages(),
     textScaleFactor: findBrowserTextScaleFactor(),
   );
@@ -420,7 +421,7 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
             return;
           case 'HapticFeedback.vibrate':
             final String? type = decoded.arguments as String?;
-            domRenderer.vibrate(_getHapticFeedbackDuration(type));
+            vibrate(_getHapticFeedbackDuration(type));
             replyToPlatformMessage(callback, codec.encodeSuccessEnvelope(true));
             return;
           case 'SystemChrome.setApplicationSwitcherDescription':
@@ -428,13 +429,13 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
             // TODO(ferhat): Find more appropriate defaults? Or noop when values are null?
             final String label = arguments['label'] as String? ?? '';
             final int primaryColor = arguments['primaryColor'] as int? ?? 0xFF000000;
-            domRenderer.setTitle(label);
-            domRenderer.setThemeColor(ui.Color(primaryColor));
+            html.document.title = label;
+            setThemeColor(ui.Color(primaryColor));
             replyToPlatformMessage(callback, codec.encodeSuccessEnvelope(true));
             return;
           case 'SystemChrome.setPreferredOrientations':
             final List<dynamic> arguments = decoded.arguments as List<dynamic>;
-            domRenderer.setPreferredOrientation(arguments).then((bool success) {
+            flutterViewEmbedder.setPreferredOrientation(arguments).then((bool success) {
               replyToPlatformMessage(
                   callback, codec.encodeSuccessEnvelope(success));
             });
@@ -482,8 +483,9 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
       case 'flutter/platform_views':
         _platformViewMessageHandler ??= PlatformViewMessageHandler(
           contentManager: platformViewManager,
-          contentHandler: (html.Element content) {
-            domRenderer.glassPaneElement!.append(content);
+          contentHandler: (DomElement content) {
+            // Remove cast to [html.Element] after migration.
+            flutterViewEmbedder.glassPaneElement!.append(content as html.Element);
           },
         );
         _platformViewMessageHandler!.handlePlatformViewCall(data, callback!);
@@ -530,17 +532,23 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
   }
 
   int _getHapticFeedbackDuration(String? type) {
+    const int vibrateLongPress = 50;
+    const int vibrateLightImpact = 10;
+    const int vibrateMediumImpact = 20;
+    const int vibrateHeavyImpact = 30;
+    const int vibrateSelectionClick = 10;
+
     switch (type) {
       case 'HapticFeedbackType.lightImpact':
-        return DomRenderer.vibrateLightImpact;
+        return vibrateLightImpact;
       case 'HapticFeedbackType.mediumImpact':
-        return DomRenderer.vibrateMediumImpact;
+        return vibrateMediumImpact;
       case 'HapticFeedbackType.heavyImpact':
-        return DomRenderer.vibrateHeavyImpact;
+        return vibrateHeavyImpact;
       case 'HapticFeedbackType.selectionClick':
-        return DomRenderer.vibrateSelectionClick;
+        return vibrateSelectionClick;
       default:
-        return DomRenderer.vibrateLongPress;
+        return vibrateLongPress;
     }
   }
 
@@ -600,7 +608,7 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
       rasterizer!.draw(layerScene.layerTree);
     } else {
       final SurfaceScene surfaceScene = scene as SurfaceScene;
-      domRenderer.renderScene(surfaceScene.webOnlyRootElement);
+      flutterViewEmbedder.addSceneToSceneHost(surfaceScene.webOnlyRootElement as html.Element?);
     }
     frameTimingsOnRasterFinish();
   }
@@ -718,12 +726,12 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
   /// The empty list is not a valid value for locales. This is only used for
   /// testing locale update logic.
   void debugResetLocales() {
-    _configuration = _configuration.copyWith(locales: const <ui.Locale>[]);
+    configuration = configuration.copyWith(locales: const <ui.Locale>[]);
   }
 
-  // Called by DomRenderer when browser languages change.
+  // Called by FlutterViewEmbedder when browser languages change.
   void updateLocales() {
-    _configuration = _configuration.copyWith(locales: parseBrowserLanguages());
+    configuration = configuration.copyWith(locales: parseBrowserLanguages());
   }
 
   static List<ui.Locale> parseBrowserLanguages() {
@@ -777,6 +785,54 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
   @override
   bool get alwaysUse24HourFormat => configuration.alwaysUse24HourFormat;
 
+  /// Updates [textScaleFactor] and invokes [onTextScaleFactorChanged] and
+  /// [onPlatformConfigurationChanged] callbacks if [textScaleFactor] changed.
+  void _updateTextScaleFactor(double value) {
+    if (configuration.textScaleFactor != value) {
+      configuration = configuration.copyWith(textScaleFactor: value);
+      invokeOnPlatformConfigurationChanged();
+      invokeOnTextScaleFactorChanged();
+    }
+  }
+
+  /// Watches for font-size changes in the browser's <html> element to
+  /// recalculate [textScaleFactor].
+  ///
+  /// Updates [textScaleFactor] with the new value.
+  html.MutationObserver? _fontSizeObserver;
+
+  /// Set the callback function for updating [textScaleFactor] based on
+  /// font-size changes in the browser's <html> element.
+  void _addFontSizeObserver() {
+    const String styleAttribute = 'style';
+
+    _fontSizeObserver = html.MutationObserver(
+        (List<dynamic> mutations, html.MutationObserver _) {
+      for (final dynamic mutation in mutations) {
+        final html.MutationRecord record = mutation as html.MutationRecord;
+        if (record.type == 'attributes' &&
+            record.attributeName == styleAttribute) {
+          final double newTextScaleFactor = findBrowserTextScaleFactor();
+          _updateTextScaleFactor(newTextScaleFactor);
+        }
+      }
+    });
+    _fontSizeObserver!.observe(
+      html.document.documentElement!,
+      attributes: true,
+      attributeFilter: <String>[styleAttribute],
+    );
+    registerHotRestartListener(() {
+      _disconnectFontSizeObserver();
+    });
+  }
+
+  /// Remove the observer for font-size changes in the browser's <html> element.
+  void _disconnectFontSizeObserver() {
+    _fontSizeObserver?.disconnect();
+    _fontSizeObserver = null;
+  }
+
   /// A callback that is invoked whenever [textScaleFactor] changes value.
   ///
   /// The framework invokes this callback in the same zone in which the
@@ -804,7 +860,7 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
 
   void updateSemanticsEnabled(bool semanticsEnabled) {
     if (semanticsEnabled != this.semanticsEnabled) {
-      _configuration = _configuration.copyWith(semanticsEnabled: semanticsEnabled);
+      configuration = configuration.copyWith(semanticsEnabled: semanticsEnabled);
       if (_onSemanticsEnabledChanged != null) {
         invokeOnSemanticsEnabledChanged();
       }
@@ -820,11 +876,15 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
   /// callback if [_platformBrightness] changed.
   void _updatePlatformBrightness(ui.Brightness value) {
     if (configuration.platformBrightness != value) {
-      _configuration = configuration.copyWith(platformBrightness: value);
+      configuration = configuration.copyWith(platformBrightness: value);
       invokeOnPlatformConfigurationChanged();
       invokeOnPlatformBrightnessChanged();
     }
   }
+
+  /// The setting indicating the current system font of the host platform.
+  @override
+  String? get systemFontFamily => configuration.systemFontFamily;
 
   /// Reference to css media query that indicates the user theme preference on the web.
   final html.MediaQueryList _brightnessMediaQuery =
@@ -885,6 +945,32 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
     invoke(_onPlatformBrightnessChanged, _onPlatformBrightnessChangedZone);
   }
 
+  /// A callback that is invoked whenever [systemFontFamily] changes value.
+  ///
+  /// The framework invokes this callback in the same zone in which the
+  /// callback was set.
+  ///
+  /// See also:
+  ///
+  ///  * [WidgetsBindingObserver], for a mechanism at the widgets layer to
+  ///    observe when this callback is invoked.
+  @override
+  ui.VoidCallback? get onSystemFontFamilyChanged =>
+      _onSystemFontFamilyChanged;
+  ui.VoidCallback? _onSystemFontFamilyChanged;
+  Zone? _onSystemFontFamilyChangedZone;
+  @override
+  set onSystemFontFamilyChanged(ui.VoidCallback? callback) {
+    _onSystemFontFamilyChanged = callback;
+    _onSystemFontFamilyChangedZone = Zone.current;
+  }
+
+  /// Engine code should use this method instead of the callback directly.
+  /// Otherwise zones won't work properly.
+  void invokeOnSystemFontFamilyChanged() {
+    invoke(_onSystemFontFamilyChanged, _onSystemFontFamilyChangedZone);
+  }
+
   /// Whether the user has requested that [updateSemantics] be called when
   /// the semantic contents of window changes.
   ///
@@ -939,6 +1025,19 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
         _onSemanticsAction, _onSemanticsActionZone, id, action, args);
   }
 
+  // TODO(dnfield): make this work on web.
+  // https://github.com/flutter/flutter/issues/100277
+  ui.ErrorCallback? _onError;
+  // ignore: unused_field
+  Zone? _onErrorZone;
+  @override
+  ui.ErrorCallback? get onError => _onError;
+  @override
+  set onError(ui.ErrorCallback? callback) {
+    _onError = callback;
+    _onErrorZone = Zone.current;
+  }
+
   /// The route or path that the embedder requested when the application was
   /// launched.
   ///
@@ -978,7 +1077,7 @@ class EnginePlatformDispatcher extends ui.PlatformDispatcher {
   /// Lazily initialized when the `defaultRouteName` getter is invoked.
   ///
   /// The reason for the lazy initialization is to give enough time for the app
-  /// to set [locationStrategy] in `lib/src/ui/initialization.dart`.
+  /// to set [locationStrategy] in `lib/initialization.dart`.
   String? _defaultRouteName;
 
   @visibleForTesting
@@ -1085,35 +1184,6 @@ const double _defaultRootFontSize = 16.0;
 /// Finds the text scale factor of the browser by looking at the computed style
 /// of the browser's <html> element.
 double findBrowserTextScaleFactor() {
-  final num fontSize = _parseFontSize(html.document.documentElement!) ?? _defaultRootFontSize;
+  final num fontSize = parseFontSize(html.document.documentElement!) ?? _defaultRootFontSize;
   return fontSize / _defaultRootFontSize;
-}
-
-/// Parses the font size of [element] and returns the value without a unit.
-num? _parseFontSize(html.Element element) {
-  num? fontSize;
-
-  if (js_util.hasProperty(element, 'computedStyleMap')) {
-    // Use the newer `computedStyleMap` API available on some browsers.
-    final dynamic computedStyleMap =
-        // ignore: implicit_dynamic_function
-        js_util.callMethod(element, 'computedStyleMap', <Object?>[]);
-    if (computedStyleMap is Object) {
-      final dynamic fontSizeObject =
-          // ignore: implicit_dynamic_function
-          js_util.callMethod(computedStyleMap, 'get', <Object?>['font-size']);
-      if (fontSizeObject is Object) {
-        // ignore: implicit_dynamic_function
-        fontSize = js_util.getProperty(fontSizeObject, 'value') as num;
-      }
-    }
-  }
-
-  if (fontSize == null) {
-    // Fallback to `getComputedStyle`.
-    final String fontSizeString = element.getComputedStyle().fontSize;
-    fontSize = parseFloat(fontSizeString);
-  }
-
-  return fontSize;
 }

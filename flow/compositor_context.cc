@@ -36,22 +36,27 @@ std::optional<SkRect> FrameDamage::ComputeClipRect(
       layer_tree.root_layer()->Diff(&context, prev_root_layer);
     }
 
-    damage_ = context.ComputeDamage(additional_damage_);
+    damage_ =
+        context.ComputeDamage(additional_damage_, horizontal_clip_alignment_,
+                              vertical_clip_alignment_);
     return SkRect::Make(damage_->buffer_damage);
   } else {
     return std::nullopt;
   }
 }
 
-CompositorContext::CompositorContext(fml::Milliseconds frame_budget)
-    : raster_time_(frame_budget), ui_time_(frame_budget) {}
+CompositorContext::CompositorContext()
+    : raster_time_(fixed_refresh_rate_updater_),
+      ui_time_(fixed_refresh_rate_updater_) {}
+
+CompositorContext::CompositorContext(Stopwatch::RefreshRateUpdater& updater)
+    : raster_time_(updater), ui_time_(updater) {}
 
 CompositorContext::~CompositorContext() = default;
 
 void CompositorContext::BeginFrame(ScopedFrame& frame,
                                    bool enable_instrumentation) {
   if (enable_instrumentation) {
-    frame_count_.Increment();
     raster_time_.Start();
   }
 }
@@ -70,10 +75,12 @@ std::unique_ptr<CompositorContext::ScopedFrame> CompositorContext::AcquireFrame(
     const SkMatrix& root_surface_transformation,
     bool instrumentation_enabled,
     bool surface_supports_readback,
-    fml::RefPtr<fml::RasterThreadMerger> raster_thread_merger) {
+    fml::RefPtr<fml::RasterThreadMerger> raster_thread_merger,
+    DisplayListBuilder* display_list_builder) {
   return std::make_unique<ScopedFrame>(
       *this, gr_context, canvas, view_embedder, root_surface_transformation,
-      instrumentation_enabled, surface_supports_readback, raster_thread_merger);
+      instrumentation_enabled, surface_supports_readback, raster_thread_merger,
+      display_list_builder);
 }
 
 CompositorContext::ScopedFrame::ScopedFrame(
@@ -84,10 +91,12 @@ CompositorContext::ScopedFrame::ScopedFrame(
     const SkMatrix& root_surface_transformation,
     bool instrumentation_enabled,
     bool surface_supports_readback,
-    fml::RefPtr<fml::RasterThreadMerger> raster_thread_merger)
+    fml::RefPtr<fml::RasterThreadMerger> raster_thread_merger,
+    DisplayListBuilder* display_list_builder)
     : context_(context),
       gr_context_(gr_context),
       canvas_(canvas),
+      display_list_builder_(display_list_builder),
       view_embedder_(view_embedder),
       root_surface_transformation_(root_surface_transformation),
       instrumentation_enabled_(instrumentation_enabled),

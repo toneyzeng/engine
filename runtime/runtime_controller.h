@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 
+#include "flutter/assets/asset_manager.h"
 #include "flutter/common/task_runners.h"
 #include "flutter/flow/layers/layer_tree.h"
 #include "flutter/fml/macros.h"
@@ -102,7 +103,10 @@ class RuntimeController : public PlatformConfigurationClient {
       const std::function<void(int64_t)>& idle_notification_callback,
       const fml::closure& isolate_create_callback,
       const fml::closure& isolate_shutdown_callback,
-      std::shared_ptr<const fml::Mapping> persistent_isolate_data) const;
+      std::shared_ptr<const fml::Mapping> persistent_isolate_data,
+      fml::WeakPtr<IOManager> io_manager,
+      fml::WeakPtr<ImageDecoder> image_decoder,
+      fml::WeakPtr<ImageGeneratorRegistry> image_generator_registry) const;
 
   // |PlatformConfigurationClient|
   ~RuntimeController() override;
@@ -348,13 +352,12 @@ class RuntimeController : public PlatformConfigurationClient {
   /// @bug        The `deadline` argument must be converted to `std::chrono`
   ///             instead of a raw integer.
   ///
-  /// @param[in]  deadline  The deadline measures in microseconds against the
-  ///             system's monotonic time. The clock can be accessed via
-  ///             `Dart_TimelineGetMicros`.
+  /// @param[in]  deadline  The deadline is used by the VM to determine if the
+  ///             corresponding sweep can be performed within the deadline.
   ///
   /// @return     If the idle notification was forwarded to the running isolate.
   ///
-  virtual bool NotifyIdle(int64_t deadline);
+  virtual bool NotifyIdle(fml::TimePoint deadline);
 
   //----------------------------------------------------------------------------
   /// @brief      Returns if the root isolate is running. The isolate must be
@@ -530,6 +533,10 @@ class RuntimeController : public PlatformConfigurationClient {
 
   // |PlatformConfigurationClient|
   void RequestDartDeferredLibrary(intptr_t loading_unit_id) override;
+
+  // |PlatformConfigurationClient|
+  std::shared_ptr<const fml::Mapping> GetPersistentIsolateData() override;
+
   const fml::WeakPtr<IOManager>& GetIOManager() const {
     return context_.io_manager;
   }
@@ -548,6 +555,10 @@ class RuntimeController : public PlatformConfigurationClient {
 
   const fml::WeakPtr<SnapshotDelegate>& GetSnapshotDelegate() const {
     return context_.snapshot_delegate;
+  }
+
+  std::weak_ptr<const DartIsolate> GetRootIsolate() const {
+    return root_isolate_;
   }
 
  protected:
@@ -605,14 +616,14 @@ class RuntimeController : public PlatformConfigurationClient {
   FontCollection& GetFontCollection() override;
 
   // |PlatformConfigurationClient|
+  std::shared_ptr<AssetManager> GetAssetManager() override;
+
+  // |PlatformConfigurationClient|
   void UpdateIsolateDescription(const std::string isolate_name,
                                 int64_t isolate_port) override;
 
   // |PlatformConfigurationClient|
   void SetNeedsReportTimings(bool value) override;
-
-  // |PlatformConfigurationClient|
-  std::shared_ptr<const fml::Mapping> GetPersistentIsolateData() override;
 
   // |PlatformConfigurationClient|
   std::unique_ptr<std::vector<std::string>> ComputePlatformResolvedLocale(

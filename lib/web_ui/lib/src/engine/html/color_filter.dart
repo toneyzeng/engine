@@ -10,7 +10,8 @@ import 'package:ui/ui.dart' as ui;
 import '../browser_detection.dart';
 import '../canvaskit/color_filter.dart';
 import '../color_filter.dart';
-import '../dom_renderer.dart';
+import '../dom.dart';
+import '../embedder.dart';
 import '../util.dart';
 import 'bitmap_canvas.dart';
 import 'path_to_svg_clip.dart';
@@ -23,12 +24,12 @@ class PersistedColorFilter extends PersistedContainerSurface
       : super(oldLayer);
 
   @override
-  html.Element? get childContainer => _childContainer;
+  DomElement? get childContainer => _childContainer;
 
   /// The dedicated child container element that's separate from the
   /// [rootElement] is used to compensate for the coordinate system shift
   /// introduced by the [rootElement] translation.
-  html.Element? _childContainer;
+  DomElement? _childContainer;
 
   /// Color filter to apply to this surface.
   final ui.ColorFilter filter;
@@ -53,7 +54,7 @@ class PersistedColorFilter extends PersistedContainerSurface
   @override
   void discard() {
     super.discard();
-    domRenderer.removeResource(_filterElement);
+    flutterViewEmbedder.removeResource(_filterElement);
     // Do not detach the child container from the root. It is permanently
     // attached. The elements are reused together and are detached from the DOM
     // together.
@@ -61,9 +62,9 @@ class PersistedColorFilter extends PersistedContainerSurface
   }
 
   @override
-  html.Element createElement() {
-    final html.Element element = defaultCreateElement('flt-color-filter');
-    final html.Element container = html.Element.tag('flt-filter-interior');
+  DomElement createElement() {
+    final DomElement element = defaultCreateElement('flt-color-filter');
+    final DomElement container = createDomElement('flt-filter-interior');
     container.style.position = 'absolute';
     _childContainer = container;
     element.append(_childContainer!);
@@ -72,7 +73,7 @@ class PersistedColorFilter extends PersistedContainerSurface
 
   @override
   void apply() {
-    domRenderer.removeResource(_filterElement);
+    flutterViewEmbedder.removeResource(_filterElement);
     _filterElement = null;
     final EngineColorFilter? engineValue = filter as EngineColorFilter?;
     if (engineValue == null) {
@@ -92,7 +93,7 @@ class PersistedColorFilter extends PersistedContainerSurface
   void _applyBlendModeFilter(CkBlendModeColorFilter colorFilter) {
     final ui.Color filterColor = colorFilter.color;
     ui.BlendMode colorFilterBlendMode = colorFilter.blendMode;
-    final html.CssStyleDeclaration style = childContainer!.style;
+    final DomCSSStyleDeclaration style = childContainer!.style;
     switch (colorFilterBlendMode) {
       case ui.BlendMode.clear:
       case ui.BlendMode.dstOut:
@@ -138,19 +139,19 @@ class PersistedColorFilter extends PersistedContainerSurface
     // Use SVG filter for blend mode.
     final SvgFilter svgFilter = svgFilterFromBlendMode(filterColor, colorFilterBlendMode);
     _filterElement = svgFilter.element;
-    domRenderer.addResource(_filterElement!);
+    flutterViewEmbedder.addResource(_filterElement!);
     style.filter = 'url(#${svgFilter.id})';
     if (colorFilterBlendMode == ui.BlendMode.saturation ||
         colorFilterBlendMode == ui.BlendMode.multiply ||
         colorFilterBlendMode == ui.BlendMode.modulate) {
-      style.backgroundColor = colorToCssString(filterColor);
+      style.backgroundColor = colorToCssString(filterColor)!;
     }
   }
 
   void _applyMatrixColorFilter(CkMatrixColorFilter colorFilter) {
     final SvgFilter svgFilter = svgFilterFromColorMatrix(colorFilter.matrix);
     _filterElement = svgFilter.element;
-    domRenderer.addResource(_filterElement!);
+    flutterViewEmbedder.addResource(_filterElement!);
     childContainer!.style.filter = 'url(#${svgFilter.id})';
   }
 

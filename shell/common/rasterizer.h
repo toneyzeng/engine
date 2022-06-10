@@ -42,7 +42,8 @@ namespace flutter {
 /// and the on-screen render surface. The compositor context has all the GPU
 /// state necessary to render frames to the render surface.
 ///
-class Rasterizer final : public SnapshotDelegate {
+class Rasterizer final : public SnapshotDelegate,
+                         public Stopwatch::RefreshRateUpdater {
  public:
   //----------------------------------------------------------------------------
   /// @brief      Used to forward events from the rasterizer to interested
@@ -141,6 +142,13 @@ class Rasterizer final : public SnapshotDelegate {
   void Teardown();
 
   //----------------------------------------------------------------------------
+  /// @brief      Releases any resource used by the external view embedder.
+  ///             For example, overlay surfaces or Android views.
+  ///             On Android, this method post a task to the platform thread,
+  ///             and waits until it completes.
+  void TeardownExternalViewEmbedder();
+
+  //----------------------------------------------------------------------------
   /// @brief      Notifies the rasterizer that there is a low memory situation
   ///             and it must purge as many unnecessary resources as possible.
   ///             Currently, the Skia context associated with onscreen rendering
@@ -233,10 +241,8 @@ class Rasterizer final : public SnapshotDelegate {
   /// @param[in]  discard_callback if specified and returns true, the layer tree
   ///                             is discarded instead of being rendered
   ///
-  RasterStatus Draw(
-      std::unique_ptr<FrameTimingsRecorder> frame_timings_recorder,
-      std::shared_ptr<Pipeline<flutter::LayerTree>> pipeline,
-      LayerTreeDiscardCallback discard_callback = NoDiscard);
+  RasterStatus Draw(std::shared_ptr<LayerTreePipeline> pipeline,
+                    LayerTreeDiscardCallback discard_callback = NoDiscard);
 
   //----------------------------------------------------------------------------
   /// @brief      The type of the screenshot to obtain of the previously
@@ -460,6 +466,12 @@ class Rasterizer final : public SnapshotDelegate {
   // |SnapshotDelegate|
   sk_sp<SkImage> ConvertToRasterImage(sk_sp<SkImage> image) override;
 
+  // |Stopwatch::Delegate|
+  /// Time limit for a smooth frame.
+  ///
+  /// See: `DisplayManager::GetMainDisplayRefreshRate`.
+  fml::Milliseconds GetFrameBudget() const override;
+
   sk_sp<SkData> ScreenshotLayerTreeAsImage(
       flutter::LayerTree* tree,
       flutter::CompositorContext& compositor_context,
@@ -483,6 +495,7 @@ class Rasterizer final : public SnapshotDelegate {
   void FireNextFrameCallbackIfPresent();
 
   static bool NoDiscard(const flutter::LayerTree& layer_tree) { return false; }
+  static bool ShouldResubmitFrame(const RasterStatus& raster_status);
 
   Delegate& delegate_;
   std::unique_ptr<Surface> surface_;
@@ -494,6 +507,7 @@ class Rasterizer final : public SnapshotDelegate {
   // has not successfully rasterized. This can happen due to the change in the
   // thread configuration. This will be inserted to the front of the pipeline.
   std::unique_ptr<flutter::LayerTree> resubmitted_layer_tree_;
+  std::unique_ptr<FrameTimingsRecorder> resubmitted_recorder_;
   fml::closure next_frame_callback_;
   bool user_override_resource_cache_bytes_;
   std::optional<size_t> max_cache_bytes_;

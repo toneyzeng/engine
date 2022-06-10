@@ -3,8 +3,6 @@
 // found in the LICENSE file.
 
 import 'dart:html' as html;
-import 'dart:js' as js;
-import 'dart:js_util' as js_util;
 import 'dart:math' as math;
 
 import 'package:meta/meta.dart';
@@ -14,6 +12,7 @@ import '../engine.dart' show registerHotRestartListener;
 import 'browser_detection.dart';
 import 'platform_dispatcher.dart';
 import 'pointer_converter.dart';
+import 'safe_browser_api.dart';
 import 'semantics.dart';
 
 /// Set this flag to true to see all the fired events in the console.
@@ -63,6 +62,16 @@ int convertButtonToButtons(int button) {
   }
 }
 
+/// Wrapping the Safari iOS workaround that adds a dummy event listener
+/// More info about the issue and workaround: https://github.com/flutter/flutter/issues/70858
+class SafariPointerEventWorkaround {
+  static SafariPointerEventWorkaround instance = SafariPointerEventWorkaround();
+
+  void workAroundMissingPointerEvents() {
+    html.document.addEventListener('touchstart', (html.Event event) {});
+  }
+}
+
 class PointerBinding {
   /// The singleton instance of this object.
   static PointerBinding? get instance => _instance;
@@ -70,20 +79,27 @@ class PointerBinding {
 
   static void initInstance(html.Element glassPaneElement) {
     if (_instance == null) {
-      _instance = PointerBinding._(glassPaneElement);
+      _instance = PointerBinding(glassPaneElement);
       assert(() {
-        registerHotRestartListener(() {
-          _instance!._adapter.clearListeners();
-          _instance!._pointerDataConverter.clearPointerState();
-        });
+        registerHotRestartListener(_instance!.dispose);
         return true;
       }());
     }
   }
 
-  PointerBinding._(this.glassPaneElement)
+  /// Performs necessary clean up for PointerBinding including removing event listeners
+  /// and clearing the existing pointer state
+  void dispose() {
+    _adapter.clearListeners();
+    _pointerDataConverter.clearPointerState();
+  }
+
+  PointerBinding(this.glassPaneElement)
     : _pointerDataConverter = PointerDataConverter(),
       _detector = const PointerSupportDetector() {
+    if (isIosSafari) {
+      SafariPointerEventWorkaround.instance.workAroundMissingPointerEvents();
+    }
     _adapter = _createAdapter();
   }
 
@@ -143,13 +159,81 @@ class PointerBinding {
 class PointerSupportDetector {
   const PointerSupportDetector();
 
-  bool get hasPointerEvents => js_util.hasProperty(html.window, 'PointerEvent');
-  bool get hasTouchEvents => js_util.hasProperty(html.window, 'TouchEvent');
-  bool get hasMouseEvents => js_util.hasProperty(html.window, 'MouseEvent');
+  bool get hasPointerEvents => hasJsProperty(html.window, 'PointerEvent');
+  bool get hasTouchEvents => hasJsProperty(html.window, 'TouchEvent');
+  bool get hasMouseEvents => hasJsProperty(html.window, 'MouseEvent');
 
   @override
   String toString() =>
       'pointers:$hasPointerEvents, touch:$hasTouchEvents, mouse:$hasMouseEvents';
+}
+
+class _Listener {
+  _Listener._({
+    required this.event,
+    required this.target,
+    required this.handler,
+    required this.useCapture,
+    required this.isNative,
+  });
+
+  /// Registers a listener for the given [event] on [target] using the Dart-to-JS API.
+  factory _Listener.register({
+    required String event,
+    required html.EventTarget target,
+    required html.EventListener handler,
+    bool capture = false,
+  }) {
+    final _Listener listener = _Listener._(
+      event: event,
+      target: target,
+      handler: handler,
+      useCapture: capture,
+      isNative: false,
+    );
+    target.addEventListener(event, handler, capture);
+    return listener;
+  }
+
+  /// Registers a listener for the given [event] on [target] using the native JS API.
+  factory _Listener.registerNative({
+    required String event,
+    required html.EventTarget target,
+    required html.EventListener handler,
+    bool capture = false,
+    bool passive = false,
+  }) {
+    final Object eventOptions = createPlainJsObject(<String, Object?>{
+      'capture': capture,
+      'passive': passive,
+    });
+    final html.EventListener jsHandler = allowInterop((html.Event event) => handler(event));
+    final _Listener listener = _Listener._(
+      event: event,
+      target: target,
+      handler: jsHandler,
+      useCapture: capture,
+      isNative: true,
+    );
+    addJsEventListener(target, event, jsHandler, eventOptions);
+    return listener;
+  }
+
+  final String event;
+
+  final html.EventTarget target;
+  final html.EventListener handler;
+
+  final bool useCapture;
+  final bool isNative;
+
+  void unregister() {
+    if (isNative) {
+      removeJsEventListener(target, event, handler, useCapture);
+    } else {
+      target.removeEventListener(event, handler, useCapture);
+    }
+  }
 }
 
 /// Common functionality that's shared among adapters.
@@ -158,12 +242,7 @@ abstract class _BaseAdapter {
     setup();
   }
 
-  /// Listeners that are registered through dart to js api.
-  static final Map<String, html.EventListener> _listeners =
-    <String, html.EventListener>{};
-  /// Listeners that are registered through native javascript api.
-  static final Map<String, html.EventListener> _nativeListeners =
-    <String, html.EventListener>{};
+  final List<_Listener> _listeners = <_Listener>[];
   final html.Element glassPaneElement;
   _PointerDataCallback _callback;
   PointerDataConverter _pointerDataConverter;
@@ -174,42 +253,31 @@ abstract class _BaseAdapter {
 
   /// Remove all active event listeners.
   void clearListeners() {
-    _listeners.forEach((String eventName, html.EventListener listener) {
-        html.window.removeEventListener(eventName, listener, true);
-    });
-    // For native listener, we will need to remove it through native javascript
-    // api.
-    _nativeListeners.forEach((String eventName, html.EventListener listener) {
-      // ignore: implicit_dynamic_function
-      js_util.callMethod(
-        glassPaneElement,
-        'removeEventListener', <dynamic>[
-          'wheel',
-          listener,
-        ]
-      );
-    });
+    for (final _Listener listener in _listeners) {
+      listener.unregister();
+    }
     _listeners.clear();
-    _nativeListeners.clear();
   }
 
-  /// Adds a listener to the given [eventName].
+  /// Adds a listener for the given [eventName] to [target].
   ///
-  /// The event listener is attached to [html.window] but only events that have
-  /// [glassPaneElement] as a target will be let through by default.
+  /// Generally speaking, down and leave events should use [glassPaneElement]
+  /// as the [target], while move and up events should use [html.window]
+  /// instead, because the browser doesn't fire the latter two for DOM elements
+  /// when the pointer is outside the window.
   ///
-  /// If [acceptOutsideGlasspane] is set to true, events outside of the
-  /// glasspane will also invoke the [handler].
+  /// If [useCapture] is set to false, the event will be handled in the
+  /// bubbling phase instead of the capture phase.
+  /// See [DOM Level 3 Events][events] for a detailed explanation.
+  ///
+  /// [events]: https://www.w3.org/TR/DOM-Level-3-Events/#event-flow
   void addEventListener(
+    html.EventTarget target,
     String eventName,
     html.EventListener handler, {
-    bool acceptOutsideGlasspane = false,
+    bool useCapture = true,
   }) {
     dynamic loggedHandler(html.Event event) {
-      if (!acceptOutsideGlasspane && !glassPaneElement.contains(event.target as html.Node?)) {
-        return null;
-      }
-
       if (_debugLogPointerEvents) {
         if (event is html.PointerEvent) {
           print('${event.type}    '
@@ -226,12 +294,12 @@ abstract class _BaseAdapter {
         handler(event);
       }
     }
-    _listeners[eventName] = loggedHandler;
-    // We have to attach the event listener on the window instead of the
-    // glasspane element. That's because "up" events that occur outside the
-    // browser are only reported on window, not on DOM elements.
-    // See: https://github.com/flutter/flutter/issues/52827
-    html.window.addEventListener(eventName, loggedHandler, true);
+    _listeners.add(_Listener.register(
+      event: eventName,
+      target: target,
+      handler: loggedHandler,
+      capture: useCapture,
+    ));
   }
 
   /// Converts a floating number timestamp (in milliseconds) to a [Duration] by
@@ -294,20 +362,11 @@ mixin _WheelEventListenerMixin on _BaseAdapter {
   }
 
   void _addWheelEventListener(html.EventListener handler) {
-    // ignore: implicit_dynamic_function
-    final Object eventOptions = js_util.newObject() as Object;
-    final html.EventListener jsHandler = js.allowInterop((html.Event event) => handler(event));
-    _BaseAdapter._nativeListeners['wheel'] = jsHandler;
-    js_util.setProperty(eventOptions, 'passive', false);
-    // ignore: implicit_dynamic_function
-    js_util.callMethod(
-      glassPaneElement,
-      'addEventListener', <dynamic>[
-        'wheel',
-        jsHandler,
-        eventOptions
-      ]
-    );
+    _listeners.add(_Listener.registerNative(
+      event: 'wheel',
+      target: glassPaneElement,
+      handler: (html.Event event) => handler(event),
+    ));
   }
 
   void _handleWheelEvent(html.Event e) {
@@ -443,6 +502,23 @@ class _ButtonSanitizer {
     return null;
   }
 
+  _SanitizedDetails? sanitizeLeaveEvent({required int buttons}) {
+    final int newPressedButtons = _htmlButtonsToFlutterButtons(buttons);
+
+    // The move event already handles the case where the pointer is currently
+    // down, in which case handling the leave event as well is superfluous.
+    if (newPressedButtons == 0) {
+      _pressedButtons = 0;
+
+      return _SanitizedDetails(
+        change: ui.PointerChange.hover,
+        buttons: _pressedButtons,
+      );
+    }
+
+    return null;
+  }
+
   _SanitizedDetails? sanitizeUpEvent({required int? buttons}) {
     // The pointer could have been released by a `pointerout` event, in which
     // case `pointerup` should have no effect.
@@ -511,19 +587,20 @@ class _PointerAdapter extends _BaseAdapter with _WheelEventListenerMixin {
   }
 
   void _addPointerEventListener(
+    html.EventTarget target,
     String eventName,
     _PointerEventListener handler, {
-    bool acceptOutsideGlasspane = false,
+    bool useCapture = true,
   }) {
-    addEventListener(eventName, (html.Event event) {
+    addEventListener(target, eventName, (html.Event event) {
       final html.PointerEvent pointerEvent = event as html.PointerEvent;
       return handler(pointerEvent);
-    }, acceptOutsideGlasspane: acceptOutsideGlasspane);
+    }, useCapture: useCapture);
   }
 
   @override
   void setup() {
-    _addPointerEventListener('pointerdown', (html.PointerEvent event) {
+    _addPointerEventListener(glassPaneElement, 'pointerdown', (html.PointerEvent event) {
       final int device = _getPointerId(event);
       final List<ui.PointerData> pointerData = <ui.PointerData>[];
       final _ButtonSanitizer sanitizer = _ensureSanitizer(device);
@@ -541,7 +618,7 @@ class _PointerAdapter extends _BaseAdapter with _WheelEventListenerMixin {
       _callback(pointerData);
     });
 
-    _addPointerEventListener('pointermove', (html.PointerEvent event) {
+    _addPointerEventListener(html.window, 'pointermove', (html.PointerEvent event) {
       final int device = _getPointerId(event);
       final _ButtonSanitizer sanitizer = _ensureSanitizer(device);
       final List<ui.PointerData> pointerData = <ui.PointerData>[];
@@ -555,9 +632,20 @@ class _PointerAdapter extends _BaseAdapter with _WheelEventListenerMixin {
         _convertEventsToPointerData(data: pointerData, event: event, details: move);
       }
       _callback(pointerData);
-    }, acceptOutsideGlasspane: true);
+    });
 
-    _addPointerEventListener('pointerup', (html.PointerEvent event) {
+    _addPointerEventListener(glassPaneElement, 'pointerleave', (html.PointerEvent event) {
+      final int device = _getPointerId(event);
+      final _ButtonSanitizer sanitizer = _ensureSanitizer(device);
+      final List<ui.PointerData> pointerData = <ui.PointerData>[];
+      final _SanitizedDetails? details = sanitizer.sanitizeLeaveEvent(buttons: event.buttons!);
+      if (details != null) {
+        _convertEventsToPointerData(data: pointerData, event: event, details: details);
+        _callback(pointerData);
+      }
+    }, useCapture: false);
+
+    _addPointerEventListener(html.window, 'pointerup', (html.PointerEvent event) {
       final int device = _getPointerId(event);
       final List<ui.PointerData> pointerData = <ui.PointerData>[];
       final _SanitizedDetails? details = _getSanitizer(device).sanitizeUpEvent(buttons: event.buttons);
@@ -566,11 +654,11 @@ class _PointerAdapter extends _BaseAdapter with _WheelEventListenerMixin {
         _convertEventsToPointerData(data: pointerData, event: event, details: details);
         _callback(pointerData);
       }
-    }, acceptOutsideGlasspane: true);
+    });
 
     // A browser fires cancel event if it concludes the pointer will no longer
     // be able to generate events (example: device is deactivated)
-    _addPointerEventListener('pointercancel', (html.PointerEvent event) {
+    _addPointerEventListener(glassPaneElement, 'pointercancel', (html.PointerEvent event) {
       final int device = _getPointerId(event);
       final List<ui.PointerData> pointerData = <ui.PointerData>[];
       final _SanitizedDetails details = _getSanitizer(device).sanitizeCancelEvent();
@@ -618,7 +706,7 @@ class _PointerAdapter extends _BaseAdapter with _WheelEventListenerMixin {
   List<html.PointerEvent> _expandEvents(html.PointerEvent event) {
     // For browsers that don't support `getCoalescedEvents`, we fallback to
     // using the original event.
-    if (js_util.hasProperty(event, 'getCoalescedEvents')) {
+    if (hasJsProperty(event, 'getCoalescedEvents')) {
       final List<html.PointerEvent> coalescedEvents =
           event.getCoalescedEvents().cast<html.PointerEvent>();
       // Some events don't perform coalescing, so they return an empty list. In
@@ -673,8 +761,8 @@ class _TouchAdapter extends _BaseAdapter {
   void _pressTouch(int identifier) { _pressedTouches.add(identifier); }
   void _unpressTouch(int identifier) { _pressedTouches.remove(identifier); }
 
-  void _addTouchEventListener(String eventName, _TouchEventListener handler) {
-    addEventListener(eventName, (html.Event event) {
+  void _addTouchEventListener(html.EventTarget target, String eventName, _TouchEventListener handler) {
+    addEventListener(target, eventName, (html.Event event) {
       final html.TouchEvent touchEvent = event as html.TouchEvent;
       return handler(touchEvent);
     });
@@ -682,7 +770,7 @@ class _TouchAdapter extends _BaseAdapter {
 
   @override
   void setup() {
-    _addTouchEventListener('touchstart', (html.TouchEvent event) {
+    _addTouchEventListener(glassPaneElement, 'touchstart', (html.TouchEvent event) {
       final Duration timeStamp = _BaseAdapter._eventTimeStampToDuration(event.timeStamp!);
       final List<ui.PointerData> pointerData = <ui.PointerData>[];
       for (final html.Touch touch in event.changedTouches!) {
@@ -701,7 +789,7 @@ class _TouchAdapter extends _BaseAdapter {
       _callback(pointerData);
     });
 
-    _addTouchEventListener('touchmove', (html.TouchEvent event) {
+    _addTouchEventListener(glassPaneElement, 'touchmove', (html.TouchEvent event) {
       event.preventDefault(); // Prevents standard overscroll on iOS/Webkit.
       final Duration timeStamp = _BaseAdapter._eventTimeStampToDuration(event.timeStamp!);
       final List<ui.PointerData> pointerData = <ui.PointerData>[];
@@ -720,7 +808,7 @@ class _TouchAdapter extends _BaseAdapter {
       _callback(pointerData);
     });
 
-    _addTouchEventListener('touchend', (html.TouchEvent event) {
+    _addTouchEventListener(glassPaneElement, 'touchend', (html.TouchEvent event) {
       // On Safari Mobile, the keyboard does not show unless this line is
       // added.
       event.preventDefault();
@@ -742,7 +830,7 @@ class _TouchAdapter extends _BaseAdapter {
       _callback(pointerData);
     });
 
-    _addTouchEventListener('touchcancel', (html.TouchEvent event) {
+    _addTouchEventListener(glassPaneElement, 'touchcancel', (html.TouchEvent event) {
       final Duration timeStamp = _BaseAdapter._eventTimeStampToDuration(event.timeStamp!);
       final List<ui.PointerData> pointerData = <ui.PointerData>[];
       for (final html.Touch touch in event.changedTouches!) {
@@ -816,19 +904,20 @@ class _MouseAdapter extends _BaseAdapter with _WheelEventListenerMixin {
   final _ButtonSanitizer _sanitizer = _ButtonSanitizer();
 
   void _addMouseEventListener(
+    html.EventTarget target,
     String eventName,
     _MouseEventListener handler, {
-    bool acceptOutsideGlasspane = false,
+    bool useCapture = true,
   }) {
-    addEventListener(eventName, (html.Event event) {
+    addEventListener(target, eventName, (html.Event event) {
       final html.MouseEvent mouseEvent = event as html.MouseEvent;
       return handler(mouseEvent);
-    }, acceptOutsideGlasspane: acceptOutsideGlasspane);
+    }, useCapture: useCapture);
   }
 
   @override
   void setup() {
-    _addMouseEventListener('mousedown', (html.MouseEvent event) {
+    _addMouseEventListener(glassPaneElement, 'mousedown', (html.MouseEvent event) {
       final List<ui.PointerData> pointerData = <ui.PointerData>[];
       final _SanitizedDetails? up =
           _sanitizer.sanitizeMissingRightClickUp(buttons: event.buttons!);
@@ -844,7 +933,7 @@ class _MouseAdapter extends _BaseAdapter with _WheelEventListenerMixin {
       _callback(pointerData);
     });
 
-    _addMouseEventListener('mousemove', (html.MouseEvent event) {
+    _addMouseEventListener(html.window, 'mousemove', (html.MouseEvent event) {
       final List<ui.PointerData> pointerData = <ui.PointerData>[];
       final _SanitizedDetails? up = _sanitizer.sanitizeMissingRightClickUp(buttons: event.buttons!);
       if (up != null) {
@@ -853,16 +942,25 @@ class _MouseAdapter extends _BaseAdapter with _WheelEventListenerMixin {
       final _SanitizedDetails move = _sanitizer.sanitizeMoveEvent(buttons: event.buttons!);
       _convertEventsToPointerData(data: pointerData, event: event, details: move);
       _callback(pointerData);
-    }, acceptOutsideGlasspane: true);
+    });
 
-    _addMouseEventListener('mouseup', (html.MouseEvent event) {
+    _addMouseEventListener(glassPaneElement, 'mouseleave', (html.MouseEvent event) {
+      final List<ui.PointerData> pointerData = <ui.PointerData>[];
+      final _SanitizedDetails? details = _sanitizer.sanitizeLeaveEvent(buttons: event.buttons!);
+      if (details != null) {
+        _convertEventsToPointerData(data: pointerData, event: event, details: details);
+        _callback(pointerData);
+      }
+    }, useCapture: false);
+
+    _addMouseEventListener(html.window, 'mouseup', (html.MouseEvent event) {
       final List<ui.PointerData> pointerData = <ui.PointerData>[];
       final _SanitizedDetails? sanitizedDetails = _sanitizer.sanitizeUpEvent(buttons: event.buttons);
       if (sanitizedDetails != null) {
         _convertEventsToPointerData(data: pointerData, event: event, details: sanitizedDetails);
         _callback(pointerData);
       }
-    }, acceptOutsideGlasspane: true);
+    });
 
     _addWheelEventListener((html.Event event) {
       _handleWheelEvent(event);

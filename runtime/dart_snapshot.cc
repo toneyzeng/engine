@@ -25,7 +25,7 @@ const char* DartSnapshot::kIsolateInstructionsSymbol =
 // data through symbols that are statically linked into the executable.
 // On other platforms this data is obtained by a dynamic symbol lookup.
 #define DART_SNAPSHOT_STATIC_LINK \
-  ((OS_WIN || OS_ANDROID) && FLUTTER_JIT_RUNTIME)
+  ((FML_OS_WIN || FML_OS_ANDROID) && FLUTTER_JIT_RUNTIME)
 
 #if !DART_SNAPSHOT_STATIC_LINK
 
@@ -63,7 +63,7 @@ static std::shared_ptr<const fml::Mapping> SearchMapping(
   }
 
   // Attempt to open file at path specified.
-  if (file_path.size() > 0) {
+  if (!file_path.empty()) {
     if (auto file_mapping = GetFileMapping(file_path, is_executable)) {
       return file_mapping;
     }

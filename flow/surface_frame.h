@@ -9,6 +9,7 @@
 #include <optional>
 
 #include "flutter/common/graphics/gl_context_switch.h"
+#include "flutter/display_list/display_list_canvas_recorder.h"
 #include "flutter/fml/macros.h"
 #include "flutter/fml/time/time_point.h"
 #include "third_party/skia/include/core/SkCanvas.h"
@@ -21,13 +22,23 @@ namespace flutter {
 class SurfaceFrame {
  public:
   using SubmitCallback =
-      std::function<bool(const SurfaceFrame& surface_frame, SkCanvas* canvas)>;
+      std::function<bool(SurfaceFrame& surface_frame, SkCanvas* canvas)>;
 
   // Information about the underlying framebuffer
   struct FramebufferInfo {
     // Indicates whether or not the surface supports pixel readback as used in
     // circumstances such as a BackdropFilter.
     bool supports_readback = false;
+
+    // Indicates that target device supports partial repaint. At very minimum
+    // this means that the surface will provide valid existing damage.
+    bool supports_partial_repaint = false;
+
+    // For some targets it may be beneficial or even required to snap clip
+    // rect to tile grid. I.e. repainting part of a tile may cause performance
+    // degradation if the tile needs to be decompressed first.
+    int vertical_clip_alignment = 1;
+    int horizontal_clip_alignment = 1;
 
     // This is the area of framebuffer that lags behind the front buffer.
     //
@@ -45,14 +56,9 @@ class SurfaceFrame {
 
   SurfaceFrame(sk_sp<SkSurface> surface,
                FramebufferInfo framebuffer_info,
-               const SubmitCallback& submit_callback);
-
-  SurfaceFrame(sk_sp<SkSurface> surface,
-               FramebufferInfo framebuffer_info,
                const SubmitCallback& submit_callback,
-               std::unique_ptr<GLContextResult> context_result);
-
-  ~SurfaceFrame();
+               std::unique_ptr<GLContextResult> context_result = nullptr,
+               bool display_list_fallback = false);
 
   struct SubmitInfo {
     // The frame damage for frame n is the difference between frame n and
@@ -68,20 +74,18 @@ class SurfaceFrame {
     // Corresponds to EGL_KHR_partial_update
     std::optional<SkIRect> buffer_damage;
 
-    // The vsync target time.
-    //
-    // Backends may use this information to avoid overloading the GPU with
-    // multiple frames per vsync.
-    fml::TimePoint target_time;
+    // Time at which this frame is scheduled to be presented. This is a hint
+    // that can be passed to the platform to drop queued frames.
+    std::optional<fml::TimePoint> presentation_time;
   };
 
   bool Submit();
 
   bool IsSubmitted() const;
 
-  SkCanvas* SkiaCanvas();
-
   sk_sp<SkSurface> SkiaSurface() const;
+
+  SkCanvas* SkiaCanvas();
 
   const FramebufferInfo& framebuffer_info() const { return framebuffer_info_; }
 
@@ -90,9 +94,16 @@ class SurfaceFrame {
   }
   const SubmitInfo& submit_info() const { return submit_info_; }
 
+  sk_sp<DisplayListBuilder> GetDisplayListBuilder();
+
+  sk_sp<DisplayList> BuildDisplayList();
+
  private:
   bool submitted_ = false;
+
+  sk_sp<DisplayListCanvasRecorder> dl_recorder_;
   sk_sp<SkSurface> surface_;
+  SkCanvas* canvas_ = nullptr;
   FramebufferInfo framebuffer_info_;
   SubmitInfo submit_info_;
   SubmitCallback submit_callback_;

@@ -16,7 +16,6 @@ namespace flutter {
 PlatformView::PlatformView(Delegate& delegate, TaskRunners task_runners)
     : delegate_(delegate),
       task_runners_(std::move(task_runners)),
-      size_(SkISize::Make(0, 0)),
       weak_factory_(this) {}
 
 PlatformView::~PlatformView() = default;
@@ -84,9 +83,17 @@ void PlatformView::NotifyDestroyed() {
   delegate_.OnPlatformViewDestroyed();
 }
 
+void PlatformView::ScheduleFrame() {
+  delegate_.OnPlatformViewScheduleFrame();
+}
+
 sk_sp<GrDirectContext> PlatformView::CreateResourceContext() const {
   FML_DLOG(WARNING) << "This platform does not set up the resource "
                        "context on the IO thread for async texture uploads.";
+  return nullptr;
+}
+
+std::shared_ptr<impeller::Context> PlatformView::GetImpellerContext() const {
   return nullptr;
 }
 
@@ -182,6 +189,10 @@ PlatformView::CreateSnapshotSurfaceProducer() {
 std::shared_ptr<PlatformMessageHandler>
 PlatformView::GetPlatformMessageHandler() const {
   return nullptr;
+}
+
+const Settings& PlatformView::GetSettings() const {
+  return delegate_.OnPlatformViewGetSettings();
 }
 
 }  // namespace flutter

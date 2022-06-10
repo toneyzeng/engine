@@ -120,8 +120,6 @@ class UIDartState : public tonic::DartState {
 
   fml::WeakPtr<SnapshotDelegate> GetSnapshotDelegate() const;
 
-  fml::WeakPtr<GrDirectContext> GetResourceContext() const;
-
   fml::WeakPtr<ImageDecoder> GetImageDecoder() const;
 
   fml::WeakPtr<ImageGeneratorRegistry> GetImageGeneratorRegistry() const;
@@ -129,9 +127,6 @@ class UIDartState : public tonic::DartState {
   std::shared_ptr<IsolateNameServer> GetIsolateNameServer() const;
 
   tonic::DartErrorHandleType GetLastError();
-
-  void ReportUnhandledException(const std::string& error,
-                                const std::string& stack_trace);
 
   // Logs `print` messages from the application via an embedder-specified
   // logging mechanism.
@@ -156,6 +151,10 @@ class UIDartState : public tonic::DartState {
     return {std::move(object), std::move(queue)};
   };
 
+  UnhandledExceptionCallback unhandled_exception_callback() const {
+    return unhandled_exception_callback_;
+  }
+
  protected:
   UIDartState(TaskObserverAdd add_callback,
               TaskObserverRemove remove_callback,
@@ -174,8 +173,6 @@ class UIDartState : public tonic::DartState {
       std::unique_ptr<PlatformConfiguration> platform_configuration);
 
   const std::string& GetAdvisoryScriptURI() const;
-
-  const std::string& GetAdvisoryScriptEntrypoint() const;
 
  private:
   void DidSetIsolate() override;

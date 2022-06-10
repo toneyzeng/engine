@@ -7,7 +7,6 @@
 #include <utility>
 
 #include <Foundation/Foundation.h>
-#include <QuartzCore/CADisplayLink.h>
 #include <UIKit/UIKit.h>
 #include <mach/mach_time.h>
 
@@ -39,11 +38,17 @@ void VsyncWaiterIOS::AwaitVSync() {
   [client_.get() await];
 }
 
+// |VariableRefreshRateReporter|
+double VsyncWaiterIOS::GetRefreshRate() const {
+  return [client_.get() getRefreshRate];
+}
+
 }  // namespace flutter
 
 @implementation VSyncClient {
   flutter::VsyncWaiter::Callback callback_;
   fml::scoped_nsobject<CADisplayLink> display_link_;
+  double current_refresh_rate_;
 }
 
 - (instancetype)initWithTaskRunner:(fml::RefPtr<fml::TaskRunner>)task_runner
@@ -51,11 +56,14 @@ void VsyncWaiterIOS::AwaitVSync() {
   self = [super init];
 
   if (self) {
+    current_refresh_rate_ = [DisplayLinkManager displayRefreshRate];
     callback_ = std::move(callback);
     display_link_ = fml::scoped_nsobject<CADisplayLink> {
       [[CADisplayLink displayLinkWithTarget:self selector:@selector(onDisplayLink:)] retain]
     };
     display_link_.get().paused = YES;
+
+    [self setMaxRefreshRateIfEnabled];
 
     task_runner->PostTask([client = [self retain]]() {
       [client->display_link_.get() addToRunLoop:[NSRunLoop currentRunLoop]
@@ -65,6 +73,23 @@ void VsyncWaiterIOS::AwaitVSync() {
   }
 
   return self;
+}
+
+- (void)setMaxRefreshRateIfEnabled {
+  NSNumber* minimumFrameRateDisabled =
+      [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CADisableMinimumFrameDurationOnPhone"];
+  if (![minimumFrameRateDisabled boolValue]) {
+    return;
+  }
+  double maxFrameRate = fmax([DisplayLinkManager displayRefreshRate], 60);
+  double minFrameRate = fmax(maxFrameRate / 2, 60);
+
+  if (@available(iOS 15.0, *)) {
+    display_link_.get().preferredFrameRateRange =
+        CAFrameRateRangeMake(minFrameRate, maxFrameRate, maxFrameRate);
+  } else if (@available(iOS 10.0, *)) {
+    display_link_.get().preferredFramesPerSecond = maxFrameRate;
+  }
 }
 
 - (void)await {
@@ -87,9 +112,11 @@ void VsyncWaiterIOS::AwaitVSync() {
 
   std::unique_ptr<flutter::FrameTimingsRecorder> recorder =
       std::make_unique<flutter::FrameTimingsRecorder>();
+
+  current_refresh_rate_ = round(1 / (frame_target_time - frame_start_time).ToSecondsF());
+
   recorder->RecordVsync(frame_start_time, frame_target_time);
   display_link_.get().paused = YES;
-
   callback_(std::move(recorder));
 }
 
@@ -101,6 +128,14 @@ void VsyncWaiterIOS::AwaitVSync() {
   [self invalidate];
 
   [super dealloc];
+}
+
+- (double)getRefreshRate {
+  return current_refresh_rate_;
+}
+
+- (CADisplayLink*)getDisplayLink {
+  return display_link_.get();
 }
 
 @end

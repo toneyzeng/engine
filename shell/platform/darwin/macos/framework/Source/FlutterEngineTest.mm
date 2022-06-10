@@ -18,6 +18,9 @@
 #include "flutter/shell/platform/embedder/test_utils/proc_table_replacement.h"
 #include "flutter/testing/test_dart_native_resolver.h"
 
+// CREATE_NATIVE_ENTRY and MOCK_ENGINE_PROC are leaky by design
+// NOLINTBEGIN(clang-analyzer-core.StackAddressEscape)
+
 @interface FlutterEngine (Test)
 /**
  * The FlutterCompositor object currently in use by the FlutterEngine. This is
@@ -34,6 +37,24 @@ TEST_F(FlutterEngineTest, CanLaunch) {
   FlutterEngine* engine = GetFlutterEngine();
   EXPECT_TRUE([engine runWithEntrypoint:@"main"]);
   EXPECT_TRUE(engine.running);
+}
+
+TEST_F(FlutterEngineTest, HasNonNullExecutableName) {
+  // Launch the test entrypoint.
+  FlutterEngine* engine = GetFlutterEngine();
+  std::string executable_name = [[engine executableName] UTF8String];
+  ASSERT_FALSE(executable_name.empty());
+  EXPECT_TRUE([engine runWithEntrypoint:@"executableNameNotNull"]);
+
+  // Block until notified by the Dart test of the value of Platform.executable.
+  fml::AutoResetWaitableEvent latch;
+  AddNativeCallback("NotifyStringValue", CREATE_NATIVE_ENTRY([&](Dart_NativeArguments args) {
+                      const auto dart_string = tonic::DartConverter<std::string>::FromDart(
+                          Dart_GetNativeArgument(args, 0));
+                      EXPECT_EQ(executable_name, dart_string);
+                      latch.Signal();
+                    }));
+  latch.Wait();
 }
 
 TEST_F(FlutterEngineTest, MessengerSend) {
@@ -53,6 +74,31 @@ TEST_F(FlutterEngineTest, MessengerSend) {
 
   [engine.binaryMessenger sendOnChannel:@"test" message:test_message];
   EXPECT_TRUE(called);
+}
+
+TEST_F(FlutterEngineTest, CanLogToStdout) {
+  // Replace stdout stream buffer with our own.
+  std::stringstream buffer;
+  std::streambuf* old_buffer = std::cout.rdbuf();
+  std::cout.rdbuf(buffer.rdbuf());
+
+  // Launch the test entrypoint.
+  FlutterEngine* engine = GetFlutterEngine();
+  EXPECT_TRUE([engine runWithEntrypoint:@"canLogToStdout"]);
+  EXPECT_TRUE(engine.running);
+
+  // Block until completion of print statement.
+  fml::AutoResetWaitableEvent latch;
+  AddNativeCallback("SignalNativeTest",
+                    CREATE_NATIVE_ENTRY([&](Dart_NativeArguments args) { latch.Signal(); }));
+  latch.Wait();
+
+  // Restore old stdout stream buffer.
+  std::cout.rdbuf(old_buffer);
+
+  // Verify hello world was written to stdout.
+  std::string logs = buffer.str();
+  EXPECT_TRUE(logs.find("Hello logging") != std::string::npos);
 }
 
 TEST_F(FlutterEngineTest, CanToggleAccessibility) {
@@ -329,7 +375,7 @@ TEST_F(FlutterEngineTest, ResetsAccessibilityBridgeWhenSetsNewViewController) {
 
 TEST_F(FlutterEngineTest, NativeCallbacks) {
   FlutterEngine* engine = GetFlutterEngine();
-  EXPECT_TRUE([engine runWithEntrypoint:@"native_callback"]);
+  EXPECT_TRUE([engine runWithEntrypoint:@"nativeCallback"]);
   EXPECT_TRUE(engine.running);
 
   fml::AutoResetWaitableEvent latch;
@@ -343,7 +389,8 @@ TEST_F(FlutterEngineTest, NativeCallbacks) {
   ASSERT_TRUE(latch_called);
 }
 
-TEST(FlutterEngine, Compositor) {
+// TODO(iskakaushik): Enable after https://github.com/flutter/flutter/issues/96668 is fixed.
+TEST(FlutterEngine, DISABLED_Compositor) {
   NSString* fixtures = @(flutter::testing::GetFixturesPath());
   FlutterDartProject* project = [[FlutterDartProject alloc]
       initWithAssetsPath:fixtures
@@ -355,7 +402,7 @@ TEST(FlutterEngine, Compositor) {
   viewController.flutterView.frame = CGRectMake(0, 0, 800, 600);
   [engine setViewController:viewController];
 
-  EXPECT_TRUE([engine runWithEntrypoint:@"can_composite_platform_views"]);
+  EXPECT_TRUE([engine runWithEntrypoint:@"canCompositePlatformViews"]);
 
   // Latch to ensure the entire layer tree has been generated and presented.
   fml::AutoResetWaitableEvent latch;
@@ -473,4 +520,42 @@ TEST_F(FlutterEngineTest, MessengerCleanupConnectionWorks) {
   EXPECT_EQ(record, 21);
 }
 
+TEST(FlutterEngine, HasStringsWhenPasteboardEmpty) {
+  id engineMock = CreateMockFlutterEngine(nil);
+
+  // Call hasStrings and expect it to be false.
+  __block bool calledAfterClear = false;
+  __block bool valueAfterClear;
+  FlutterResult resultAfterClear = ^(id result) {
+    calledAfterClear = true;
+    NSNumber* valueNumber = [result valueForKey:@"value"];
+    valueAfterClear = [valueNumber boolValue];
+  };
+  FlutterMethodCall* methodCallAfterClear =
+      [FlutterMethodCall methodCallWithMethodName:@"Clipboard.hasStrings" arguments:nil];
+  [engineMock handleMethodCall:methodCallAfterClear result:resultAfterClear];
+  EXPECT_TRUE(calledAfterClear);
+  EXPECT_FALSE(valueAfterClear);
+}
+
+TEST(FlutterEngine, HasStringsWhenPasteboardFull) {
+  id engineMock = CreateMockFlutterEngine(@"some string");
+
+  // Call hasStrings and expect it to be true.
+  __block bool called = false;
+  __block bool value;
+  FlutterResult result = ^(id result) {
+    called = true;
+    NSNumber* valueNumber = [result valueForKey:@"value"];
+    value = [valueNumber boolValue];
+  };
+  FlutterMethodCall* methodCall =
+      [FlutterMethodCall methodCallWithMethodName:@"Clipboard.hasStrings" arguments:nil];
+  [engineMock handleMethodCall:methodCall result:result];
+  EXPECT_TRUE(called);
+  EXPECT_TRUE(value);
+}
+
 }  // namespace flutter::testing
+
+// NOLINTEND(clang-analyzer-core.StackAddressEscape)

@@ -11,7 +11,7 @@ import '../engine_canvas.dart';
 import '../picture.dart';
 import '../rrect_renderer.dart';
 import '../shadow.dart';
-import '../text/paragraph.dart';
+import '../text/canvas_paragraph.dart';
 import '../util.dart';
 import '../vector_math.dart';
 import 'bitmap_canvas.dart';
@@ -584,7 +584,7 @@ class RecordingCanvas {
 
   void drawParagraph(ui.Paragraph paragraph, ui.Offset offset) {
     assert(!_recordingEnded);
-    final EngineParagraph engineParagraph = paragraph as EngineParagraph;
+    final CanvasParagraph engineParagraph = paragraph as CanvasParagraph;
     if (!engineParagraph.isLaidOut) {
       // Ignore non-laid out paragraphs. This matches Flutter's behavior.
       return;
@@ -595,17 +595,18 @@ class RecordingCanvas {
       renderStrategy.hasArbitraryPaint = true;
     }
     renderStrategy.hasParagraphs = true;
-    final double left = offset.dx;
-    final double top = offset.dy;
     final PaintDrawParagraph command =
         PaintDrawParagraph(engineParagraph, offset);
+
+    final ui.Rect paragraphBounds = engineParagraph.paintBounds;
     _paintBounds.growLTRB(
-      left,
-      top,
-      left + engineParagraph.width,
-      top + engineParagraph.height,
+      offset.dx + paragraphBounds.left,
+      offset.dy + paragraphBounds.top,
+      offset.dx + paragraphBounds.right,
+      offset.dy + paragraphBounds.bottom,
       command,
     );
+
     _commands.add(command);
   }
 
@@ -1238,7 +1239,7 @@ class PaintDrawImageRect extends DrawCommand {
 }
 
 class PaintDrawParagraph extends DrawCommand {
-  final EngineParagraph paragraph;
+  final CanvasParagraph paragraph;
   final ui.Offset offset;
 
   PaintDrawParagraph(this.paragraph, this.offset);

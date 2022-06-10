@@ -241,12 +241,15 @@ using namespace flutter;
   // in the navigation hierarchy.
   // It's also possible in an Add2App scenario that the FlutterViewController was presented
   // outside the context of a UINavigationController, and still wants to be popped.
-  UIViewController* viewController = [UIApplication sharedApplication].keyWindow.rootViewController;
-  if ([viewController isKindOfClass:[UINavigationController class]]) {
-    [((UINavigationController*)viewController) popViewControllerAnimated:isAnimated];
+
+  UIViewController* engineViewController = [_engine.get() viewController];
+  UINavigationController* navigationController = [engineViewController navigationController];
+  if (navigationController) {
+    [navigationController popViewControllerAnimated:isAnimated];
   } else {
-    auto engineViewController = static_cast<UIViewController*>([_engine.get() viewController]);
-    if (engineViewController != viewController) {
+    UIViewController* rootViewController =
+        [UIApplication sharedApplication].keyWindow.rootViewController;
+    if (engineViewController != rootViewController) {
       [engineViewController dismissViewControllerAnimated:isAnimated completion:nil];
     }
   }
@@ -264,8 +267,9 @@ using namespace flutter;
 
 - (void)setClipboardData:(NSDictionary*)data {
   UIPasteboard* pasteboard = [UIPasteboard generalPasteboard];
-  if (data[@"text"]) {
-    pasteboard.string = data[@"text"];
+  id copyText = data[@"text"];
+  if ([copyText isKindOfClass:[NSString class]]) {
+    pasteboard.string = copyText;
   } else {
     pasteboard.string = @"null";
   }

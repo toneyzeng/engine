@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 import 'dart:html' as html;
-import 'dart:js_util' as js_util;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -11,7 +10,7 @@ import 'package:meta/meta.dart';
 import 'package:ui/ui.dart' as ui;
 
 import 'browser_detection.dart';
-import 'dom_renderer.dart';
+import 'dom.dart';
 import 'engine_canvas.dart';
 import 'html/bitmap_canvas.dart';
 import 'html/painting.dart';
@@ -24,6 +23,7 @@ import 'html/shaders/image_shader.dart';
 import 'html/shaders/shader.dart';
 import 'platform_dispatcher.dart';
 import 'rrect_renderer.dart';
+import 'safe_browser_api.dart';
 import 'shadow.dart';
 import 'util.dart';
 import 'vector_math.dart';
@@ -77,13 +77,6 @@ class CanvasPool extends _SaveStackTracking {
     translate(transform.dx, transform.dy);
   }
 
-  /// Returns true if no canvas has been allocated yet.
-  bool get isEmpty => _canvas == null;
-
-  /// Returns true if a canvas has been allocated for use.
-  bool get isNotEmpty => _canvas != null;
-
-
   /// Returns [CanvasRenderingContext2D] api to draw into this canvas.
   html.CanvasRenderingContext2D get context {
     html.CanvasRenderingContext2D? ctx = _context;
@@ -107,12 +100,28 @@ class CanvasPool extends _SaveStackTracking {
     return _contextHandle!;
   }
 
-  /// Prevents active canvas to be used for rendering and prepares a new
-  /// canvas allocation on next drawing request that will require one.
+  /// Returns true if a canvas is currently available for drawing.
   ///
-  /// Saves current canvas so we can dispose
-  /// and replay the clip/transform stack on top of new canvas.
-  void closeCurrentCanvas() {
+  /// Calling [contextHandle] or, transitively, any of the `draw*` methods while
+  /// this returns true will reuse the existing canvas. Otherwise, a new canvas
+  /// will be allocated.
+  ///
+  /// Previously allocated and closed canvases (see [closeCanvas]) are not
+  /// considered by this getter.
+  bool get hasCanvas => _canvas != null;
+
+  /// Stops the currently available canvas from receiving any further drawing
+  /// commands.
+  ///
+  /// After calling this method, a subsequent call to [contextHandle] or,
+  /// transitively, any of the `draw*` methods will cause a new canvas to be
+  /// allocated.
+  ///
+  /// The closed canvas becomes an "active" canvas, that is a canvas that's used
+  /// to render picture content in the current frame. Active canvases may be
+  /// reused in other pictures if their contents are no longer needed for this
+  /// picture.
+  void closeCanvas() {
     assert(_rootElement != null);
     // Place clean copy of current canvas with context stack restored and paint
     // reset into pool.
@@ -206,25 +215,12 @@ class CanvasPool extends _SaveStackTracking {
   }
 
   html.CanvasElement? _allocCanvas(int width, int height) {
-    final dynamic canvas =
-      // ignore: implicit_dynamic_function
-      js_util.callMethod(html.document, 'createElement', <dynamic>['CANVAS']);
-    if (canvas != null) {
-      try {
-        canvas.width = (width * _density).ceil();
-        canvas.height = (height * _density).ceil();
-      } catch (e) {
-        return null;
-      }
-      return canvas as html.CanvasElement;
-    }
-    return null;
-    // !!! We don't use the code below since NNBD assumes it can never return
-    // null and optimizes out code.
-    // return canvas = html.CanvasElement(
-    //   width: _widthInBitmapPixels,
-    //   height: _heightInBitmapPixels,
-    // );
+    // The dartdocs for `tryCreateCanvasElement` on why we don't use the
+    // `html.CanvasElement` constructor.
+    return tryCreateCanvasElement(
+      (width * _density).ceil(),
+      (height * _density).ceil(),
+    );
   }
 
   @override
@@ -751,7 +747,7 @@ class CanvasPool extends _SaveStackTracking {
         rect.center.dx - shaderBounds.left;
     final double cy = shaderBounds == null ? rect.center.dy :
         rect.center.dy - shaderBounds.top;
-    DomRenderer.ellipse(context, cx, cy, rect.width / 2,
+    drawEllipse(context, cx, cy, rect.width / 2,
         rect.height / 2, 0, 0, 2.0 * math.pi, false);
     contextHandle.paint(style);
   }
@@ -762,7 +758,7 @@ class CanvasPool extends _SaveStackTracking {
     final ui.Rect? shaderBounds = contextHandle._shaderBounds;
     final double cx = shaderBounds == null ? c.dx : c.dx - shaderBounds.left;
     final double cy = shaderBounds == null ? c.dy : c.dy - shaderBounds.top;
-    DomRenderer.ellipse(context, cx, cy, radius, radius, 0, 0, 2.0 * math.pi, false);
+    drawEllipse(context, cx, cy, radius, radius, 0, 0, 2.0 * math.pi, false);
     contextHandle.paint(style);
   }
 
@@ -988,7 +984,8 @@ class ContextStateHandle {
       if (paint.shader is EngineGradient) {
         final EngineGradient engineShader = paint.shader! as EngineGradient;
         final Object paintStyle =
-            engineShader.createPaintStyle(_canvasPool.context, shaderBounds,
+            engineShader.createPaintStyle(_canvasPool.context as
+                DomCanvasRenderingContext2D, shaderBounds,
                 density);
         fillStyle = paintStyle;
         strokeStyle = paintStyle;
@@ -998,7 +995,8 @@ class ContextStateHandle {
       } else if (paint.shader is EngineImageShader) {
         final EngineImageShader imageShader = paint.shader! as EngineImageShader;
         final Object paintStyle =
-            imageShader.createPaintStyle(_canvasPool.context, shaderBounds,
+            imageShader.createPaintStyle(_canvasPool.context as
+                DomCanvasRenderingContext2D, shaderBounds,
                 density);
         fillStyle = paintStyle;
         strokeStyle = paintStyle;

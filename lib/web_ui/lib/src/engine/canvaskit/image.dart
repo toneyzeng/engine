@@ -3,12 +3,13 @@
 // found in the LICENSE file.
 
 import 'dart:async';
-import 'dart:html' as html;
 import 'dart:typed_data';
 
 import 'package:ui/ui.dart' as ui;
 
+import '../dom.dart';
 import '../html_image_codec.dart';
+import '../safe_browser_api.dart';
 import '../util.dart';
 import 'canvaskit_api.dart';
 import 'image_wasm_codecs.dart';
@@ -60,7 +61,7 @@ void skiaDecodeImageFromPixels(
     );
 
     if (skImage == null) {
-      html.window.console.warn('Failed to create image from pixels.');
+      domWindow.console.warn('Failed to create image from pixels.');
       return;
     }
 
@@ -81,11 +82,11 @@ class ImageCodecException implements Exception {
 
 const String _kNetworkImageMessage = 'Failed to load network image.';
 
-typedef HttpRequestFactory = html.HttpRequest Function();
+typedef HttpRequestFactory = DomXMLHttpRequest Function();
 // ignore: prefer_function_declarations_over_variables
-HttpRequestFactory httpRequestFactory = () => html.HttpRequest();
+HttpRequestFactory httpRequestFactory = () => createDomXMLHttpRequest();
 void debugRestoreHttpRequestFactory() {
-  httpRequestFactory = () => html.HttpRequest();
+  httpRequestFactory = () => createDomXMLHttpRequest();
 }
 
 /// Instantiates a [ui.Codec] backed by an `SkAnimatedImage` from Skia after
@@ -105,23 +106,24 @@ Future<Uint8List> fetchImage(
     String url, WebOnlyImageCodecChunkCallback? chunkCallback) {
   final Completer<Uint8List> completer = Completer<Uint8List>();
 
-  final html.HttpRequest request = httpRequestFactory();
-  request.open('GET', url, async: true);
+  final DomXMLHttpRequest request = httpRequestFactory();
+  request.open('GET', url, true);
   request.responseType = 'arraybuffer';
   if (chunkCallback != null) {
-    request.onProgress.listen((html.ProgressEvent event) {
+    request.addEventListener('progress', allowInterop((DomEvent event)  {
+      event = event as DomProgressEvent;
       chunkCallback.call(event.loaded!, event.total!);
-    });
+    }));
   }
 
-  request.onError.listen((html.ProgressEvent event) {
+  request.addEventListener('error', allowInterop((DomEvent event) {
     completer.completeError(ImageCodecException('$_kNetworkImageMessage\n'
         'Image URL: $url\n'
         'Trying to load an image from another domain? Find answers at:\n'
         'https://flutter.dev/docs/development/platform-integration/web-images'));
-  });
+  }));
 
-  request.onLoad.listen((html.ProgressEvent event) {
+  request.addEventListener('load', allowInterop((DomEvent event) {
     final int status = request.status!;
     final bool accepted = status >= 200 && status < 300;
     final bool fileUri = status == 0; // file:// URIs have status of 0.
@@ -139,7 +141,7 @@ Future<Uint8List> fetchImage(
     }
 
     completer.complete(Uint8List.view(request.response as ByteBuffer));
-  });
+  }));
 
   request.send();
   return completer.future;
@@ -147,7 +149,7 @@ Future<Uint8List> fetchImage(
 
 /// A [ui.Image] backed by an `SkImage` from Skia.
 class CkImage implements ui.Image, StackTraceDebugger {
-  CkImage(SkImage skImage) {
+  CkImage(SkImage skImage, { this.videoFrame }) {
     if (assertionsEnabled) {
       _debugStackTrace = StackTrace.current;
     }
@@ -212,6 +214,14 @@ class CkImage implements ui.Image, StackTraceDebugger {
   // Use a box because `SkImage` may be deleted either due to this object
   // being garbage-collected, or by an explicit call to [delete].
   late final SkiaObjectBox<CkImage, SkImage> box;
+
+  /// For browsers that support `ImageDecoder` this field holds the video frame
+  /// from which this image was created.
+  ///
+  /// Skia owns the video frame and will close it when it's no longer used.
+  /// However, Flutter co-owns the [SkImage] and therefore it's safe to access
+  /// the video frame until the image is [dispose]d of.
+  VideoFrame? videoFrame;
 
   /// The underlying Skia image object.
   ///
@@ -278,6 +288,14 @@ class CkImage implements ui.Image, StackTraceDebugger {
     ui.ImageByteFormat format = ui.ImageByteFormat.rawRgba,
   }) {
     assert(_debugCheckIsNotDisposed());
+    if (videoFrame != null) {
+      return readPixelsFromVideoFrame(videoFrame!, format);
+    } else {
+      return _readPixelsFromSkImage(format);
+    }
+  }
+
+  Future<ByteData> _readPixelsFromSkImage(ui.ImageByteFormat format) {
     final SkAlphaType alphaType = format == ui.ImageByteFormat.rawStraightRgba ? canvasKit.AlphaType.Unpremul : canvasKit.AlphaType.Premul;
     final ByteData? data = _encodeImage(
       skImage: skImage,
@@ -312,7 +330,7 @@ class CkImage implements ui.Image, StackTraceDebugger {
       );
       bytes = skImage.readPixels(0, 0, imageInfo);
     } else {
-      bytes = skImage.encodeToBytes(); //defaults to PNG 100%
+      bytes = skImage.encodeToBytes(); // defaults to PNG 100%
     }
 
     return bytes?.buffer.asByteData(0, bytes.length);

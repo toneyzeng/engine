@@ -8,7 +8,8 @@
 #include <memory>
 #include <unordered_map>
 
-#include "flutter/flow/display_list.h"
+#include "flutter/display_list/display_list.h"
+#include "flutter/display_list/display_list_complexity.h"
 #include "flutter/flow/raster_cache_key.h"
 #include "flutter/fml/macros.h"
 #include "flutter/fml/memory/weak_ptr.h"
@@ -16,7 +17,11 @@
 #include "third_party/skia/include/core/SkImage.h"
 #include "third_party/skia/include/core/SkSize.h"
 
+class SkColorSpace;
+
 namespace flutter {
+
+enum class RasterCacheLayerStrategy { kLayer, kLayerChildren };
 
 class RasterCacheResult {
  public:
@@ -42,6 +47,7 @@ class RasterCacheResult {
   fml::tracing::TraceFlow flow_;
 };
 
+class Layer;
 struct PrerollContext;
 
 struct RasterCacheMetrics {
@@ -139,6 +145,7 @@ class RasterCache {
   virtual std::unique_ptr<RasterCacheResult> RasterizeLayer(
       PrerollContext* context,
       Layer* layer,
+      RasterCacheLayerStrategy strategy,
       const SkMatrix& ctm,
       bool checkerboard) const;
 
@@ -198,19 +205,30 @@ class RasterCache {
   // away.
   void Touch(SkPicture* picture, const SkMatrix& transformation_matrix);
   void Touch(DisplayList* display_list, const SkMatrix& transformation_matrix);
-  void Touch(Layer* layer, const SkMatrix& ctm);
+  void Touch(
+      Layer* layer,
+      const SkMatrix& ctm,
+      RasterCacheLayerStrategy strategey = RasterCacheLayerStrategy::kLayer);
 
-  void Prepare(PrerollContext* context, Layer* layer, const SkMatrix& ctm);
+  void Prepare(
+      PrerollContext* context,
+      Layer* layer,
+      const SkMatrix& ctm,
+      RasterCacheLayerStrategy strategey = RasterCacheLayerStrategy::kLayer);
 
   // Find the raster cache for the picture and draw it to the canvas.
   //
   // Return true if it's found and drawn.
-  bool Draw(const SkPicture& picture, SkCanvas& canvas) const;
+  bool Draw(const SkPicture& picture,
+            SkCanvas& canvas,
+            const SkPaint* paint = nullptr) const;
 
   // Find the raster cache for the display list and draw it to the canvas.
   //
   // Return true if it's found and drawn.
-  bool Draw(const DisplayList& display_list, SkCanvas& canvas) const;
+  bool Draw(const DisplayList& display_list,
+            SkCanvas& canvas,
+            const SkPaint* paint = nullptr) const;
 
   // Find the raster cache for the layer and draw it to the canvas.
   //
@@ -218,9 +236,11 @@ class RasterCache {
   // (e.g., draw the raster cache with some opacity).
   //
   // Return true if the layer raster cache is found and drawn.
-  bool Draw(const Layer* layer,
-            SkCanvas& canvas,
-            SkPaint* paint = nullptr) const;
+  bool Draw(
+      const Layer* layer,
+      SkCanvas& canvas,
+      RasterCacheLayerStrategy strategey = RasterCacheLayerStrategy::kLayer,
+      const SkPaint* paint = nullptr) const;
 
   void PrepareNewFrame();
   void CleanupAfterFrame();
@@ -285,30 +305,15 @@ class RasterCache {
     std::unique_ptr<RasterCacheResult> image;
   };
 
-  template <class Cache>
-  static void SweepOneCacheAfterFrame(Cache& cache,
-                                      RasterCacheMetrics& metrics) {
-    std::vector<typename Cache::iterator> dead;
+  void Touch(const RasterCacheKey& cache_key);
 
-    for (auto it = cache.begin(); it != cache.end(); ++it) {
-      Entry& entry = it->second;
-      if (!entry.used_this_frame) {
-        dead.push_back(it);
-      } else if (entry.image) {
-        metrics.in_use_count++;
-        metrics.in_use_bytes += entry.image->image_bytes();
-      }
-      entry.used_this_frame = false;
-    }
+  bool Draw(const RasterCacheKey& cache_key,
+            SkCanvas& canvas,
+            const SkPaint* paint) const;
 
-    for (auto it : dead) {
-      if (it->second.image) {
-        metrics.eviction_count++;
-        metrics.eviction_bytes += it->second.image->image_bytes();
-      }
-      cache.erase(it);
-    }
-  }
+  void SweepOneCacheAfterFrame(RasterCacheKey::Map<Entry>& cache,
+                               RasterCacheMetrics& picture_metrics,
+                               RasterCacheMetrics& layer_metrics);
 
   bool GenerateNewCacheInThisFrame() const {
     // Disabling caching when access_threshold is zero is historic behavior.
@@ -317,15 +322,22 @@ class RasterCache {
                picture_and_display_list_cache_limit_per_frame_;
   }
 
+  std::optional<RasterCacheKey> TryToMakeRasterCacheKeyForLayer(
+      const Layer* layer,
+      RasterCacheLayerStrategy strategy,
+      const SkMatrix& ctm) const;
+
+  const SkRect& GetPaintBoundsFromLayer(
+      Layer* layer,
+      RasterCacheLayerStrategy strategy) const;
+
   const size_t access_threshold_;
   const size_t picture_and_display_list_cache_limit_per_frame_;
   size_t picture_cached_this_frame_ = 0;
   size_t display_list_cached_this_frame_ = 0;
   RasterCacheMetrics layer_metrics_;
   RasterCacheMetrics picture_metrics_;
-  mutable PictureRasterCacheKey::Map<Entry> picture_cache_;
-  mutable DisplayListRasterCacheKey::Map<Entry> display_list_cache_;
-  mutable LayerRasterCacheKey::Map<Entry> layer_cache_;
+  mutable RasterCacheKey::Map<Entry> cache_;
   bool checkerboard_images_;
 
   void TraceStatsToTimeline() const;

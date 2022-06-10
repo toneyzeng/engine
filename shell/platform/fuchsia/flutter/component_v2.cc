@@ -51,6 +51,7 @@ constexpr char kAssetsKey[] = "assets";
 // "args" are how the component specifies arguments to the runner.
 constexpr char kArgsKey[] = "args";
 constexpr char kOldGenHeapSizeKey[] = "old_gen_heap_size";
+constexpr char kExposeDirsKey[] = "expose_dirs";
 
 constexpr char kTmpPath[] = "/tmp";
 constexpr char kServiceRootPath[] = "/svc";
@@ -86,6 +87,18 @@ void ParseArgs(std::vector<std::string>& args, ProgramMetadata* metadata) {
     } else {
       FML_LOG(ERROR) << "Invalid old_gen_heap_size: "
                      << old_gen_heap_size_option;
+    }
+  }
+
+  std::string expose_dirs_option;
+  if (parsed_args.GetOptionValue(kExposeDirsKey, &expose_dirs_option)) {
+    // Parse the comma delimited string
+    std::vector<std::string> expose_dirs;
+    std::stringstream s(expose_dirs_option);
+    while (s.good()) {
+      std::string dir;
+      getline(s, dir, ',');  // get first string delimited by comma
+      metadata->expose_dirs.push_back(dir);
     }
   }
 }
@@ -164,8 +177,8 @@ ComponentV2::ComponentV2(
   ProgramMetadata metadata = ParseProgramMetadata(start_info.program());
 
   if (metadata.data_path.empty()) {
-    FML_DLOG(ERROR) << "Could not find a /pkg/data directory for "
-                    << start_info.resolved_url();
+    FML_LOG(ERROR) << "Could not find a /pkg/data directory for "
+                   << start_info.resolved_url();
     return;
   }
 
@@ -185,8 +198,8 @@ ComponentV2::ComponentV2(
       // We should never receive namespace entries without a directory, but we
       // check it anyways to avoid crashing if we do.
       if (!entry.has_directory()) {
-        FML_DLOG(ERROR) << "Namespace entry at path (" << path
-                        << ") has no directory.";
+        FML_LOG(ERROR) << "Namespace entry at path (" << path
+                       << ") has no directory.";
         continue;
       }
 
@@ -201,7 +214,7 @@ ComponentV2::ComponentV2(
 
       zx_handle_t dir_handle = dir.release();
       if (fdio_ns_bind(fdio_ns_.get(), path.data(), dir_handle) != ZX_OK) {
-        FML_DLOG(ERROR) << "Could not bind path to namespace: " << path;
+        FML_LOG(ERROR) << "Could not bind path to namespace: " << path;
         zx_handle_close(dir_handle);
       }
     }
@@ -225,17 +238,17 @@ ComponentV2::ComponentV2(
 
   // ComponentStartInfo::runtime_dir (optional).
   if (start_info.has_runtime_dir()) {
-    runtime_dir_->Serve(fuchsia::io::OPEN_RIGHT_READABLE |
-                            fuchsia::io::OPEN_RIGHT_WRITABLE |
-                            fuchsia::io::OPEN_FLAG_DIRECTORY,
+    runtime_dir_->Serve(fuchsia::io::OpenFlags::RIGHT_READABLE |
+                            fuchsia::io::OpenFlags::RIGHT_WRITABLE |
+                            fuchsia::io::OpenFlags::DIRECTORY,
                         start_info.mutable_runtime_dir()->TakeChannel());
   }
 
   // ComponentStartInfo::outgoing_dir (optional).
   if (start_info.has_outgoing_dir()) {
-    outgoing_dir_->Serve(fuchsia::io::OPEN_RIGHT_READABLE |
-                             fuchsia::io::OPEN_RIGHT_WRITABLE |
-                             fuchsia::io::OPEN_FLAG_DIRECTORY,
+    outgoing_dir_->Serve(fuchsia::io::OpenFlags::RIGHT_READABLE |
+                             fuchsia::io::OpenFlags::RIGHT_WRITABLE |
+                             fuchsia::io::OpenFlags::DIRECTORY,
                          start_info.mutable_outgoing_dir()->TakeChannel());
   }
 
@@ -253,37 +266,46 @@ ComponentV2::ComponentV2(
   composed_service_dir->set_fallback(std::move(flutter_public_dir));
 
   // Clone and check if client is servicing the directory.
-  directory_ptr_->Clone(fuchsia::io::OPEN_FLAG_DESCRIBE |
-                            fuchsia::io::OPEN_RIGHT_READABLE |
-                            fuchsia::io::OPEN_RIGHT_WRITABLE,
+  directory_ptr_->Clone(fuchsia::io::OpenFlags::DESCRIBE |
+                            fuchsia::io::OpenFlags::RIGHT_READABLE |
+                            fuchsia::io::OpenFlags::RIGHT_WRITABLE,
                         cloned_directory_ptr_.NewRequest());
 
-  cloned_directory_ptr_.events().OnOpen =
-      [this](zx_status_t status, std::unique_ptr<fuchsia::io::NodeInfo> info) {
-        cloned_directory_ptr_.Unbind();
-        if (status != ZX_OK) {
-          FML_LOG(ERROR)
-              << "could not bind out directory for flutter component("
-              << debug_label_ << "): " << zx_status_get_string(status);
-          return;
-        }
-        const char* other_dirs[] = {"debug", "ctrl", "diagnostics"};
-        // add other directories as RemoteDirs.
-        for (auto& dir_str : other_dirs) {
-          fuchsia::io::DirectoryHandle dir;
-          auto request = dir.NewRequest().TakeChannel();
-          auto status = fdio_service_connect_at(directory_ptr_.channel().get(),
-                                                dir_str, request.release());
-          if (status == ZX_OK) {
-            outgoing_dir_->AddEntry(
-                dir_str, std::make_unique<vfs::RemoteDir>(dir.TakeChannel()));
-          } else {
-            FML_LOG(ERROR) << "could not add out directory entry(" << dir_str
-                           << ") for flutter component(" << debug_label_
-                           << "): " << zx_status_get_string(status);
-          }
-        }
-      };
+  // Collect our standard set of directories along with directories that are
+  // included in the cml file to expose.
+  std::vector<std::string> other_dirs = {"debug", "ctrl", "diagnostics"};
+  for (auto dir : metadata.expose_dirs) {
+    other_dirs.push_back(dir);
+  }
+
+  cloned_directory_ptr_.events()
+      .OnOpen = [this, other_dirs](
+                    zx_status_t status,
+                    std::unique_ptr<fuchsia::io::NodeInfo> info) {
+    cloned_directory_ptr_.Unbind();
+    if (status != ZX_OK) {
+      FML_LOG(ERROR) << "could not bind out directory for flutter component("
+                     << debug_label_ << "): " << zx_status_get_string(status);
+      return;
+    }
+
+    // add other directories as RemoteDirs.
+    for (auto& dir_str : other_dirs) {
+      fuchsia::io::DirectoryHandle dir;
+      auto request = dir.NewRequest().TakeChannel();
+      auto status = fdio_service_connect_at(directory_ptr_.channel().get(),
+                                            dir_str.c_str(), request.release());
+      if (status == ZX_OK) {
+        outgoing_dir_->AddEntry(
+            dir_str.c_str(),
+            std::make_unique<vfs::RemoteDir>(dir.TakeChannel()));
+      } else {
+        FML_LOG(ERROR) << "could not add out directory entry(" << dir_str
+                       << ") for flutter component(" << debug_label_
+                       << "): " << zx_status_get_string(status);
+      }
+    }
+  };
 
   cloned_directory_ptr_.set_error_handler(
       [this](zx_status_t status) { cloned_directory_ptr_.Unbind(); });
@@ -460,7 +482,7 @@ ComponentV2::ComponentV2(
 
   settings_.log_message_callback = [](const std::string& tag,
                                       const std::string& message) {
-    if (tag.size() > 0) {
+    if (!tag.empty()) {
       std::cout << tag << ": ";
     }
     std::cout << message << std::endl;
@@ -593,7 +615,7 @@ void ComponentV2::OnEngineTerminate(const Engine* shell_holder) {
 
   shell_holders_.erase(found);
 
-  if (shell_holders_.size() == 0) {
+  if (shell_holders_.empty()) {
     FML_VLOG(-1) << "Killing component because all shell holders have been "
                     "terminated.";
     Kill();
@@ -617,7 +639,7 @@ void ComponentV2::CreateViewWithViewRef(
     fuchsia::ui::views::ViewRefControl control_ref,
     fuchsia::ui::views::ViewRef view_ref) {
   if (!svc_) {
-    FML_DLOG(ERROR)
+    FML_LOG(ERROR)
         << "Component incoming services was invalid when attempting to "
            "create a shell for a view provider request.";
     return;
@@ -644,7 +666,7 @@ void ComponentV2::CreateViewWithViewRef(
 
 void ComponentV2::CreateView2(fuchsia::ui::app::CreateView2Args view_args) {
   if (!svc_) {
-    FML_DLOG(ERROR)
+    FML_LOG(ERROR)
         << "Component incoming services was invalid when attempting to "
            "create a shell for a view provider request.";
     return;

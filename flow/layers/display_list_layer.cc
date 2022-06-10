@@ -4,7 +4,11 @@
 
 #include "flutter/flow/layers/display_list_layer.h"
 
-#include "flutter/flow/display_list_canvas.h"
+#include "flutter/display_list/display_list_builder.h"
+#include "flutter/display_list/display_list_flags.h"
+#include "flutter/flow/layer_snapshot_store.h"
+#include "flutter/flow/layers/offscreen_surface.h"
+#include "flutter/flow/raster_cache.h"
 
 namespace flutter {
 
@@ -91,11 +95,17 @@ void DisplayListLayer::Preroll(PrerollContext* context,
 
   SkRect bounds = disp_list->bounds().makeOffset(offset_.x(), offset_.y());
 
+  if (disp_list->can_apply_group_opacity()) {
+    context->subtree_can_inherit_opacity = true;
+  }
+
   if (auto* cache = context->raster_cache) {
     TRACE_EVENT0("flutter", "DisplayListLayer::RasterCache (Preroll)");
     if (context->cull_rect.intersects(bounds)) {
-      cache->Prepare(context, disp_list, is_complex_, will_change_, matrix,
-                     offset_);
+      if (cache->Prepare(context, disp_list, is_complex_, will_change_, matrix,
+                         offset_)) {
+        context->subtree_can_inherit_opacity = true;
+      }
     } else {
       // Don't evict raster cache entry during partial repaint
       cache->Touch(disp_list, matrix);
@@ -116,13 +126,56 @@ void DisplayListLayer::Paint(PaintContext& context) const {
       context.leaf_nodes_canvas->getTotalMatrix()));
 #endif
 
-  if (context.raster_cache &&
-      context.raster_cache->Draw(*display_list(), *context.leaf_nodes_canvas)) {
-    TRACE_EVENT_INSTANT0("flutter", "raster cache hit");
-    return;
+  if (context.raster_cache) {
+    AutoCachePaint cache_paint(context);
+    if (context.raster_cache->Draw(*display_list(), *context.leaf_nodes_canvas,
+                                   cache_paint.paint())) {
+      TRACE_EVENT_INSTANT0("flutter", "raster cache hit");
+      return;
+    }
   }
 
-  display_list()->RenderTo(context.leaf_nodes_canvas);
+  if (context.enable_leaf_layer_tracing) {
+    const auto canvas_size = context.leaf_nodes_canvas->getBaseLayerSize();
+    auto offscreen_surface =
+        std::make_unique<OffscreenSurface>(context.gr_context, canvas_size);
+
+    const auto& ctm = context.leaf_nodes_canvas->getTotalMatrix();
+
+    const auto start_time = fml::TimePoint::Now();
+    {
+      // render display list to offscreen surface.
+      auto* canvas = offscreen_surface->GetCanvas();
+      SkAutoCanvasRestore save(canvas, true);
+      canvas->clear(SK_ColorTRANSPARENT);
+      canvas->setMatrix(ctm);
+      display_list()->RenderTo(canvas, context.inherited_opacity);
+      canvas->flush();
+    }
+    const fml::TimeDelta offscreen_render_time =
+        fml::TimePoint::Now() - start_time;
+
+    const SkIRect device_bounds =
+        RasterCache::GetDeviceBounds(paint_bounds(), ctm);
+    sk_sp<SkData> raster_data = offscreen_surface->GetRasterData(true);
+    LayerSnapshotData snapshot_data(unique_id(), offscreen_render_time,
+                                    raster_data, device_bounds);
+    context.layer_snapshot_store->Add(snapshot_data);
+  }
+
+  if (context.leaf_nodes_builder) {
+    AutoCachePaint save_paint(context);
+    int restore_count = context.leaf_nodes_builder->getSaveCount();
+    if (save_paint.paint() != nullptr) {
+      DlPaint paint = DlPaint().setAlpha(save_paint.paint()->getAlpha());
+      context.leaf_nodes_builder->saveLayer(&paint_bounds(), &paint);
+    }
+    context.leaf_nodes_builder->drawDisplayList(display_list_.skia_object());
+    context.leaf_nodes_builder->restoreToCount(restore_count);
+  } else {
+    display_list()->RenderTo(context.leaf_nodes_canvas,
+                             context.inherited_opacity);
+  }
 }
 
 }  // namespace flutter

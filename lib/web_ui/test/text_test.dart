@@ -20,13 +20,17 @@ void main() {
 Future<void> testMain() async {
   const double baselineRatio = 1.1662499904632568;
 
-  await webOnlyInitializeTestDomRenderer();
+  await initializeTestFlutterViewEmbedder();
 
   late String fallback;
   setUp(() {
     if (operatingSystem == OperatingSystem.macOs ||
         operatingSystem == OperatingSystem.iOs) {
-      fallback = '-apple-system, BlinkMacSystemFont';
+      if (isIOS15) {
+        fallback = 'BlinkMacSystemFont';
+      } else {
+        fallback = '-apple-system, BlinkMacSystemFont';
+      }
     } else {
       fallback = 'Arial';
     }
@@ -220,8 +224,8 @@ Future<void> testMain() async {
     final CanvasParagraph paragraph = builder.build() as CanvasParagraph;
     paragraph.layout(const ParagraphConstraints(width: 800.0));
     expect(paragraph.plainText, 'abcdef');
-    final List<SpanElement> spans =
-        paragraph.toDomElement().querySelectorAll('span');
+    final List<Element> spans =
+        paragraph.toDomElement().querySelectorAll('flt-span').cast<Element>().toList();
     expect(spans[0].style.fontFamily, 'Ahem, $fallback, sans-serif');
     // The nested span here should not set it's family to default sans-serif.
     expect(spans[1].style.fontFamily, 'Ahem, $fallback, sans-serif');
@@ -241,7 +245,7 @@ Future<void> testMain() async {
     ), 'Hello');
 
     paragraph.layout(constrain(double.infinity));
-    expect(paragraph.toDomElement().style.fontFamily,
+    expect(paragraph.toDomElement().children.single.style.fontFamily,
         'SomeFont, $fallback, sans-serif');
 
     debugEmulateFlutterTesterEnvironment = true;
@@ -261,7 +265,7 @@ Future<void> testMain() async {
     ), 'Hello');
 
     paragraph.layout(constrain(double.infinity));
-    expect(paragraph.toDomElement().style.fontFamily, 'serif');
+    expect(paragraph.toDomElement().children.single.style.fontFamily, 'serif');
 
     debugEmulateFlutterTesterEnvironment = true;
   });
@@ -276,7 +280,7 @@ Future<void> testMain() async {
     ), 'Hello');
 
     paragraph.layout(constrain(double.infinity));
-    expect(paragraph.toDomElement().style.fontFamily,
+    expect(paragraph.toDomElement().children.single.style.fontFamily,
         '"MyFont 2000", $fallback, sans-serif');
 
     debugEmulateFlutterTesterEnvironment = true;

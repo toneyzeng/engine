@@ -6,10 +6,13 @@
 #import <XCTest/XCTest.h>
 
 #include "flutter/fml/platform/darwin/message_loop_darwin.h"
+#import "flutter/lib/ui/window/platform_configuration.h"
+#include "flutter/lib/ui/window/pointer_data.h"
 #import "flutter/lib/ui/window/viewport_metrics.h"
 #import "flutter/shell/platform/darwin/common/framework/Headers/FlutterBinaryMessenger.h"
 #import "flutter/shell/platform/darwin/common/framework/Headers/FlutterMacros.h"
 #import "flutter/shell/platform/darwin/ios/framework/Headers/FlutterViewController.h"
+#import "flutter/shell/platform/darwin/ios/framework/Source/FlutterEmbedderKeyResponder.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterFakeKeyEvents.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterTextInputPlugin.h"
 #import "flutter/shell/platform/darwin/ios/framework/Source/FlutterViewController_Internal.h"
@@ -23,10 +26,6 @@ FLUTTER_ASSERT_ARC
             callback:(nullable FlutterKeyEventCallback)callback
             userData:(nullable void*)userData;
 @end
-
-namespace flutter {
-class PointerDataPacket {};
-}
 
 /// Sometimes we have to use a custom mock to avoid retain cycles in OCMock.
 /// Used for testing low memory notification.
@@ -116,7 +115,19 @@ typedef enum UIAccessibilityContrast : NSInteger {
 @end
 #endif
 
+@interface FlutterKeyboardManager (Tests)
+@property(nonatomic, retain, readonly)
+    NSMutableArray<id<FlutterKeyPrimaryResponder>>* primaryResponders;
+@end
+
+@interface FlutterEmbedderKeyResponder (Tests)
+@property(nonatomic, copy, readonly) FlutterSendKeyEvent sendEvent;
+@end
+
 @interface FlutterViewController (Tests)
+
+@property(nonatomic, assign) double targetViewInsetBottom;
+
 - (void)surfaceUpdated:(BOOL)appeared;
 - (void)performOrientationUpdate:(UIInterfaceOrientationMask)new_preferences;
 - (void)handlePressEvent:(FlutterUIPressProxy*)press
@@ -127,9 +138,12 @@ typedef enum UIAccessibilityContrast : NSInteger {
 - (void)applicationWillTerminate:(NSNotification*)notification;
 - (void)goToApplicationLifecycle:(nonnull NSString*)state;
 - (void)keyboardWillChangeFrame:(NSNotification*)notification;
+- (void)keyboardWillBeHidden:(NSNotification*)notification;
 - (void)startKeyBoardAnimation:(NSTimeInterval)duration;
 - (void)ensureViewportMetricsIsCorrect;
 - (void)invalidateDisplayLink;
+- (void)addInternalPlugins;
+- (flutter::PointerData)generatePointerDataForFake;
 @end
 
 @interface FlutterViewControllerTest : XCTestCase
@@ -186,6 +200,30 @@ typedef enum UIAccessibilityContrast : NSInteger {
   [viewControllerMock keyboardWillChangeFrame:notification];
   OCMVerify([viewControllerMock startKeyBoardAnimation:0.25]);
   [self waitForExpectationsWithTimeout:5.0 handler:nil];
+}
+
+- (void)testEnsureBottomInsetIsZeroWhenKeyboardDismissed {
+  FlutterEngine* mockEngine = OCMPartialMock([[FlutterEngine alloc] init]);
+  [mockEngine createShell:@"" libraryURI:@"" initialRoute:nil];
+  FlutterViewController* viewController = [[FlutterViewController alloc] initWithEngine:mockEngine
+                                                                                nibName:nil
+                                                                                 bundle:nil];
+
+  FlutterViewController* viewControllerMock = OCMPartialMock(viewController);
+  CGRect keyboardFrame = CGRectMake(0, 0, 0, 0);
+  BOOL isLocal = YES;
+  NSNotification* fakeNotification = [NSNotification
+      notificationWithName:@""
+                    object:nil
+                  userInfo:@{
+                    @"UIKeyboardFrameEndUserInfoKey" : [NSValue valueWithCGRect:keyboardFrame],
+                    @"UIKeyboardAnimationDurationUserInfoKey" : @(0.25),
+                    @"UIKeyboardIsLocalUserInfoKey" : @(isLocal)
+                  }];
+
+  viewControllerMock.targetViewInsetBottom = 10;
+  [viewControllerMock keyboardWillBeHidden:fakeNotification];
+  XCTAssertTrue(viewControllerMock.targetViewInsetBottom == 0);
 }
 
 - (void)testEnsureViewportMetricsWillInvokeAndDisplayLinkWillInvalidateInViewDidDisappear {
@@ -357,9 +395,10 @@ typedef enum UIAccessibilityContrast : NSInteger {
                                                                                 nibName:nil
                                                                                  bundle:nil];
   mockEngine.viewController = viewController;
-  [viewController updateViewportMetrics];
   flutter::ViewportMetrics viewportMetrics;
-  OCMVerify([mockEngine updateViewportMetrics:viewportMetrics]);
+  OCMExpect([mockEngine updateViewportMetrics:viewportMetrics]).ignoringNonObjectArgs();
+  [viewController updateViewportMetrics];
+  OCMVerifyAll(mockEngine);
 }
 
 - (void)testViewDidLoadDoesntInvokeEngineWhenNotTheViewController {
@@ -389,6 +428,35 @@ typedef enum UIAccessibilityContrast : NSInteger {
   UIView* view = viewController.view;
   XCTAssertNotNil(view);
   OCMVerify([mockEngine attachView]);
+}
+
+- (void)testInternalPluginsWeakPtrNotCrash {
+  FlutterSendKeyEvent sendEvent;
+  @autoreleasepool {
+    FlutterViewController* vc = [[FlutterViewController alloc] initWithProject:nil
+                                                                       nibName:nil
+                                                                        bundle:nil];
+    [vc addInternalPlugins];
+    FlutterKeyboardManager* keyboardManager = vc.keyboardManager;
+    FlutterEmbedderKeyResponder* keyPrimaryResponder = (FlutterEmbedderKeyResponder*)
+        [(NSArray<id<FlutterKeyPrimaryResponder>>*)keyboardManager.primaryResponders firstObject];
+    sendEvent = [keyPrimaryResponder sendEvent];
+  }
+
+  if (sendEvent) {
+    sendEvent({}, nil, nil);
+  }
+}
+
+// Regression test for https://github.com/flutter/engine/pull/32098.
+- (void)testInternalPluginsInvokeInViewDidLoad {
+  FlutterEngine* mockEngine = OCMPartialMock([[FlutterEngine alloc] init]);
+  [mockEngine createShell:@"" libraryURI:@"" initialRoute:nil];
+  FlutterViewController* viewController = [[FlutterViewController alloc] initWithEngine:mockEngine
+                                                                                nibName:nil
+                                                                                 bundle:nil];
+  [viewController viewDidLoad];
+  OCMVerify([viewController addInternalPlugins]);
 }
 
 - (void)testBinaryMessenger {
@@ -585,6 +653,46 @@ typedef enum UIAccessibilityContrast : NSInteger {
   [partialMockVC stopMocking];
   [settingsChannel stopMocking];
   [mockTraitCollection stopMocking];
+}
+
+- (void)testItReportsAccessibilityOnOffSwitchLabelsFlagNotSet {
+  if (@available(iOS 13, *)) {
+    // noop
+  } else {
+    return;
+  }
+
+  // Setup test.
+  FlutterViewController* viewController =
+      [[FlutterViewController alloc] initWithEngine:self.mockEngine nibName:nil bundle:nil];
+  id partialMockViewController = OCMPartialMock(viewController);
+  OCMStub([partialMockViewController accessibilityIsOnOffSwitchLabelsEnabled]).andReturn(NO);
+
+  // Exercise behavior under test.
+  int32_t flags = [partialMockViewController accessibilityFlags];
+
+  // Verify behavior.
+  XCTAssert((flags & (int32_t)flutter::AccessibilityFeatureFlag::kOnOffSwitchLabels) == 0);
+}
+
+- (void)testItReportsAccessibilityOnOffSwitchLabelsFlagSet {
+  if (@available(iOS 13, *)) {
+    // noop
+  } else {
+    return;
+  }
+
+  // Setup test.
+  FlutterViewController* viewController =
+      [[FlutterViewController alloc] initWithEngine:self.mockEngine nibName:nil bundle:nil];
+  id partialMockViewController = OCMPartialMock(viewController);
+  OCMStub([partialMockViewController accessibilityIsOnOffSwitchLabelsEnabled]).andReturn(YES);
+
+  // Exercise behavior under test.
+  int32_t flags = [partialMockViewController accessibilityFlags];
+
+  // Verify behavior.
+  XCTAssert((flags & (int32_t)flutter::AccessibilityFeatureFlag::kOnOffSwitchLabels) != 0);
 }
 
 - (void)testPerformOrientationUpdateForcesOrientationChange {
@@ -831,6 +939,9 @@ typedef enum UIAccessibilityContrast : NSInteger {
   FlutterViewController* realVC = [[FlutterViewController alloc] initWithEngine:engine
                                                                         nibName:nil
                                                                          bundle:nil];
+  id flutterViewControllerClassMOCK = OCMClassMock([FlutterViewController class]);
+  [[[flutterViewControllerClassMOCK stub] andReturnValue:@YES] isUIAccessibilityIsVoiceOverRunning];
+
   XCTAssertFalse(realVC.view.accessibilityElementsHidden);
   [[NSNotificationCenter defaultCenter]
       postNotificationName:UIApplicationWillResignActiveNotification
@@ -841,6 +952,32 @@ typedef enum UIAccessibilityContrast : NSInteger {
                     object:nil];
   XCTAssertFalse(realVC.view.accessibilityElementsHidden);
   engine.viewController = nil;
+
+  [flutterViewControllerClassMOCK stopMocking];
+}
+
+- (void)testDontHideA11yElementsWhenVoiceOverIsOff {
+  FlutterDartProject* project = [[FlutterDartProject alloc] init];
+  FlutterEngine* engine = [[FlutterEngine alloc] initWithName:@"foobar" project:project];
+  [engine createShell:@"" libraryURI:@"" initialRoute:nil];
+  FlutterViewController* realVC = [[FlutterViewController alloc] initWithEngine:engine
+                                                                        nibName:nil
+                                                                         bundle:nil];
+  id flutterViewControllerClassMOCK = OCMClassMock([FlutterViewController class]);
+  [[[flutterViewControllerClassMOCK stub] andReturnValue:@NO] isUIAccessibilityIsVoiceOverRunning];
+
+  XCTAssertFalse(realVC.view.accessibilityElementsHidden);
+  [[NSNotificationCenter defaultCenter]
+      postNotificationName:UIApplicationWillResignActiveNotification
+                    object:nil];
+  XCTAssertFalse(realVC.view.accessibilityElementsHidden);
+  [[NSNotificationCenter defaultCenter]
+      postNotificationName:UIApplicationDidBecomeActiveNotification
+                    object:nil];
+  XCTAssertFalse(realVC.view.accessibilityElementsHidden);
+  engine.viewController = nil;
+
+  [flutterViewControllerClassMOCK stopMocking];
 }
 
 - (void)testNotifyLowMemory {
@@ -1022,7 +1159,20 @@ typedef enum UIAccessibilityContrast : NSInteger {
   [vc scrollEvent:mockPanGestureRecognizer];
 
   [[[self.mockEngine verify] ignoringNonObjectArgs]
-      dispatchPointerDataPacket:std::make_unique<flutter::PointerDataPacket>()];
+      dispatchPointerDataPacket:std::make_unique<flutter::PointerDataPacket>(0)];
 }
 
+- (void)testFakeEventTimeStamp {
+  FlutterViewController* vc = [[FlutterViewController alloc] initWithEngine:self.mockEngine
+                                                                    nibName:nil
+                                                                     bundle:nil];
+  XCTAssertNotNil(vc);
+
+  flutter::PointerData pointer_data = [vc generatePointerDataForFake];
+  int64_t current_micros = [[NSProcessInfo processInfo] systemUptime] * 1000 * 1000;
+  int64_t interval_micros = current_micros - pointer_data.time_stamp;
+  const int64_t tolerance_millis = 2;
+  XCTAssertTrue(interval_micros / 1000 < tolerance_millis,
+                @"PointerData.time_stamp should be equal to NSProcessInfo.systemUptime");
+}
 @end

@@ -104,7 +104,7 @@ void AccessibilityBridge::UpdateSemantics(flutter::SemanticsNodeUpdates nodes,
       [newChildren addObject:child];
     }
     object.children = newChildren;
-    if (node.customAccessibilityActions.size() > 0) {
+    if (!node.customAccessibilityActions.empty()) {
       NSMutableArray<FlutterCustomAccessibilityAction*>* accessibilityCustomActions =
           [[[NSMutableArray alloc] init] autorelease];
       for (int32_t action_id : node.customAccessibilityActions) {
@@ -242,8 +242,10 @@ static void ReplaceSemanticsObject(SemanticsObject* oldObject,
   assert(oldObject.node.id == newObject.uid);
   NSNumber* nodeId = @(oldObject.node.id);
   NSUInteger positionInChildlist = [oldObject.parent.children indexOfObject:oldObject];
-  [objects removeObjectForKey:nodeId];
+  [[oldObject retain] autorelease];
+  oldObject.children = @[];
   [oldObject.parent replaceChildAtIndex:positionInChildlist withChild:newObject];
+  [objects removeObjectForKey:nodeId];
   objects[nodeId] = newObject;
 }
 

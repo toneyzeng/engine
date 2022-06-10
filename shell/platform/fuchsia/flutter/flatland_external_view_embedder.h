@@ -7,6 +7,7 @@
 
 #include <fuchsia/ui/composition/cpp/fidl.h>
 #include <fuchsia/ui/views/cpp/fidl.h>
+#include <lib/fit/function.h>
 #include <lib/ui/scenic/cpp/view_ref_pair.h>
 
 #include <cstdint>  // For uint32_t & uint64_t
@@ -52,8 +53,8 @@ class FlatlandExternalViewEmbedder final
       fuchsia::ui::composition::ViewBoundProtocols endpoints,
       fidl::InterfaceRequest<fuchsia::ui::composition::ParentViewportWatcher>
           parent_viewport_watcher_request,
-      FlatlandConnection& flatland,
-      SurfaceProducer& surface_producer,
+      std::shared_ptr<FlatlandConnection> flatland,
+      std::shared_ptr<SurfaceProducer> surface_producer,
       bool intercept_all_input = false);
   ~FlatlandExternalViewEmbedder();
 
@@ -161,6 +162,7 @@ class FlatlandExternalViewEmbedder final
     fuchsia::ui::composition::ContentId viewport_id;
     ViewMutators mutators;
     SkSize size = SkSize::MakeEmpty();
+    fit::callback<void(const SkSize&)> pending_create_viewport_callback;
   };
 
   struct FlatlandLayer {
@@ -168,8 +170,9 @@ class FlatlandExternalViewEmbedder final
     fuchsia::ui::composition::TransformId transform_id;
   };
 
-  FlatlandConnection& flatland_;
-  SurfaceProducer& surface_producer_;
+  std::shared_ptr<FlatlandConnection> flatland_;
+  std::shared_ptr<SurfaceProducer> surface_producer_;
+
   fuchsia::ui::composition::ParentViewportWatcherPtr parent_viewport_watcher_;
 
   fuchsia::ui::composition::TransformId root_transform_id_;

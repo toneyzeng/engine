@@ -9,9 +9,13 @@ import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
 import android.content.res.Configuration;
+import android.database.ContentObserver;
 import android.graphics.Insets;
 import android.graphics.Rect;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
 import android.text.format.DateFormat;
 import android.util.AttributeSet;
 import android.util.SparseArray;
@@ -31,6 +35,8 @@ import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.autofill.AutofillValue;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.view.textservice.SpellCheckerInfo;
+import android.view.textservice.TextServicesManager;
 import android.widget.FrameLayout;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -53,10 +59,13 @@ import io.flutter.embedding.engine.renderer.FlutterRenderer.DisplayFeatureType;
 import io.flutter.embedding.engine.renderer.FlutterUiDisplayListener;
 import io.flutter.embedding.engine.renderer.RenderSurface;
 import io.flutter.embedding.engine.systemchannels.SettingsChannel;
+import io.flutter.plugin.common.BinaryMessenger;
+import io.flutter.plugin.editing.SpellCheckPlugin;
 import io.flutter.plugin.editing.TextInputPlugin;
 import io.flutter.plugin.localization.LocalizationPlugin;
 import io.flutter.plugin.mouse.MouseCursorPlugin;
 import io.flutter.plugin.platform.PlatformViewsController;
+import io.flutter.util.ViewUtils;
 import io.flutter.view.AccessibilityBridge;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -93,7 +102,8 @@ import java.util.Set;
  * See <a>https://source.android.com/devices/graphics/arch-tv#surface_or_texture</a> for more
  * information comparing {@link android.view.SurfaceView} and {@link android.view.TextureView}.
  */
-public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseCursorViewDelegate {
+public class FlutterView extends FrameLayout
+    implements MouseCursorPlugin.MouseCursorViewDelegate, KeyboardManager.ViewDelegate {
   private static final String TAG = "FlutterView";
 
   // Internal view hierarchy references.
@@ -116,13 +126,15 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
   // possibly storing intermediate state, and communicating those events to Flutter.
   //
   // These components essentially add some additional behavioral logic on top of
-  // existing, stateless system channels, e.g., KeyEventChannel, TextInputChannel, etc.
+  // existing, stateless system channels, e.g., MouseCursorChannel, TextInputChannel, etc.
   @Nullable private MouseCursorPlugin mouseCursorPlugin;
   @Nullable private TextInputPlugin textInputPlugin;
+  @Nullable private SpellCheckPlugin spellCheckPlugin;
   @Nullable private LocalizationPlugin localizationPlugin;
   @Nullable private KeyboardManager keyboardManager;
   @Nullable private AndroidTouchProcessor androidTouchProcessor;
   @Nullable private AccessibilityBridge accessibilityBridge;
+  @Nullable private TextServicesManager textServicesManager;
 
   // Provides access to foldable/hinge information
   @Nullable private WindowInfoRepositoryCallbackAdapterWrapper windowInfoRepo;
@@ -136,6 +148,25 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
         public void onAccessibilityChanged(
             boolean isAccessibilityEnabled, boolean isTouchExplorationEnabled) {
           resetWillNotDraw(isAccessibilityEnabled, isTouchExplorationEnabled);
+        }
+      };
+
+  private final ContentObserver systemSettingsObserver =
+      new ContentObserver(new Handler(Looper.getMainLooper())) {
+        @Override
+        public void onChange(boolean selfChange) {
+          super.onChange(selfChange);
+          if (flutterEngine == null) {
+            return;
+          }
+          Log.v(TAG, "System settings changed. Sending user settings to Flutter.");
+          sendUserSettingsToFlutter();
+        }
+
+        @Override
+        public boolean deliverSelfNotifications() {
+          // The Flutter app may change system settings.
+          return true;
         }
       };
 
@@ -455,7 +486,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
     try {
       return new WindowInfoRepositoryCallbackAdapterWrapper(
           new WindowInfoTrackerCallbackAdapter(
-              WindowInfoTracker.getOrCreate((Activity) getContext())));
+              WindowInfoTracker.Companion.getOrCreate(getContext())));
     } catch (NoClassDefFoundError noClassDefFoundError) {
       // Testing environment uses gn/javac, which does not work with aar files. This is why aar
       // are converted to jar files, losing resources and other android-specific files.
@@ -476,9 +507,10 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
   protected void onAttachedToWindow() {
     super.onAttachedToWindow();
     this.windowInfoRepo = createWindowInfoRepo();
-    if (windowInfoRepo != null) {
+    Activity activity = ViewUtils.getActivity(getContext());
+    if (windowInfoRepo != null && activity != null) {
       windowInfoRepo.addWindowLayoutInfoListener(
-          (Activity) getContext(), ContextCompat.getMainExecutor(getContext()), windowInfoListener);
+          activity, ContextCompat.getMainExecutor(getContext()), windowInfoListener);
     }
   }
 
@@ -766,7 +798,6 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
             + viewportMetrics.viewInsetBottom);
 
     sendViewportMetricsToFlutter();
-
     return newInsets;
   }
 
@@ -843,21 +874,6 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
   }
 
   /**
-   * Allows a {@code View} that is not currently the input connection target to invoke commands on
-   * the {@link android.view.inputmethod.InputMethodManager}, which is otherwise disallowed.
-   *
-   * <p>Returns true to allow non-input-connection-targets to invoke methods on {@code
-   * InputMethodManager}, or false to exclusively allow the input connection target to invoke such
-   * methods.
-   */
-  @Override
-  public boolean checkInputConnectionProxy(View view) {
-    return flutterEngine != null
-        ? flutterEngine.getPlatformViewsController().checkInputConnectionProxy(view)
-        : super.checkInputConnectionProxy(view);
-  }
-
-  /**
    * Invoked when a hardware key is pressed or released.
    *
    * <p>This method is typically invoked in response to the press of a physical keyboard key or a
@@ -869,7 +885,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
    * previous {@code keyCode} to generate a unicode combined character.
    */
   @Override
-  public boolean dispatchKeyEvent(KeyEvent event) {
+  public boolean dispatchKeyEvent(@NonNull KeyEvent event) {
     if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
       // Tell Android to start tracking this event.
       getKeyDispatcherState().startTracking(event, this);
@@ -978,6 +994,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
    * @return The view matching the accessibility id if any.
    */
   @SuppressLint("SoonBlockedPrivateApi")
+  @Nullable
   public View findViewByAccessibilityIdTraversal(int accessibilityId) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
       return findViewByAccessibilityIdRootedAtCurrentView(accessibilityId, this);
@@ -1011,7 +1028,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
    * @param currentView The root view.
    * @return A descendant of currentView or currentView itself.
    */
-  @SuppressLint("PrivateApi")
+  @SuppressLint("DiscouragedPrivateApi")
   private View findViewByAccessibilityIdRootedAtCurrentView(int accessibilityId, View currentView) {
     Method getAccessibilityViewIdMethod;
     try {
@@ -1063,6 +1080,25 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
   }
   // -------- End: Mouse ---------
 
+  // -------- Start: Keyboard -------
+
+  @Override
+  public BinaryMessenger getBinaryMessenger() {
+    return flutterEngine.getDartExecutor();
+  }
+
+  @Override
+  public boolean onTextInputKeyEvent(@NonNull KeyEvent keyEvent) {
+    return textInputPlugin.handleKeyEvent(keyEvent);
+  }
+
+  @Override
+  public void redispatch(@NonNull KeyEvent keyEvent) {
+    getRootView().dispatchKeyEvent(keyEvent);
+  }
+
+  // -------- End: Keyboard -------
+
   /**
    * Connects this {@code FlutterView} to the given {@link
    * io.flutter.embedding.engine.FlutterEngine}.
@@ -1110,15 +1146,20 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
             this,
             this.flutterEngine.getTextInputChannel(),
             this.flutterEngine.getPlatformViewsController());
+
+    try {
+      textServicesManager =
+          (TextServicesManager)
+              getContext().getSystemService(Context.TEXT_SERVICES_MANAGER_SERVICE);
+      spellCheckPlugin =
+          new SpellCheckPlugin(textServicesManager, this.flutterEngine.getSpellCheckChannel());
+    } catch (Exception e) {
+      Log.e(TAG, "TextServicesManager not supported by device, spell check disabled.");
+    }
+
     localizationPlugin = this.flutterEngine.getLocalizationPlugin();
 
-    keyboardManager =
-        new KeyboardManager(
-            this,
-            textInputPlugin,
-            new KeyChannelResponder[] {
-              new KeyChannelResponder(flutterEngine.getKeyEventChannel())
-            });
+    keyboardManager = new KeyboardManager(this);
     androidTouchProcessor =
         new AndroidTouchProcessor(this.flutterEngine.getRenderer(), /*trackMotionEvents=*/ false);
     accessibilityBridge =
@@ -1147,6 +1188,13 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
 
     // Push View and Context related information from Android to Flutter.
     sendUserSettingsToFlutter();
+    getContext()
+        .getContentResolver()
+        .registerContentObserver(
+            Settings.System.getUriFor(Settings.System.TEXT_SHOW_PASSWORD),
+            false,
+            systemSettingsObserver);
+
     localizationPlugin.sendLocalesToFlutter(getResources().getConfiguration());
     sendViewportMetricsToFlutter();
 
@@ -1188,10 +1236,12 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
       listener.onFlutterEngineDetachedFromFlutterView();
     }
 
+    getContext().getContentResolver().unregisterContentObserver(systemSettingsObserver);
+
     flutterEngine.getPlatformViewsController().detachFromView();
 
     // Disconnect the FlutterEngine's PlatformViewsController from the AccessibilityBridge.
-    flutterEngine.getPlatformViewsController().detachAccessibiltyBridge();
+    flutterEngine.getPlatformViewsController().detachAccessibilityBridge();
 
     // Disconnect and clean up the AccessibilityBridge.
     accessibilityBridge.release();
@@ -1204,6 +1254,9 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
     textInputPlugin.getInputMethodManager().restartInput(this);
     textInputPlugin.destroy();
     keyboardManager.destroy();
+    if (spellCheckPlugin != null) {
+      spellCheckPlugin.destroy();
+    }
 
     if (mouseCursorPlugin != null) {
       mouseCursorPlugin.destroy();
@@ -1222,7 +1275,14 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
     }
     renderSurface.detachFromRenderer();
 
-    flutterImageView = null;
+    if (flutterImageView != null) {
+      flutterImageView.closeImageReader();
+      // Remove the FlutterImageView that was previously added by {@code convertToImageView} to
+      // avoid leaks when this FlutterView is reused later in the scenario where multiple
+      // FlutterActivitiy/FlutterFragment share one engine.
+      removeView(flutterImageView);
+      flutterImageView = null;
+    }
     previousRenderSurface = null;
     flutterEngine = null;
   }
@@ -1308,7 +1368,7 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
         });
   }
 
-  public void attachOverlaySurfaceToRender(FlutterImageView view) {
+  public void attachOverlaySurfaceToRender(@NonNull FlutterImageView view) {
     if (flutterEngine != null) {
       view.attachToRenderer(flutterEngine.getRenderer());
     }
@@ -1381,10 +1441,38 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
             ? SettingsChannel.PlatformBrightness.dark
             : SettingsChannel.PlatformBrightness.light;
 
+    boolean isNativeSpellCheckServiceDefined = false;
+
+    if (textServicesManager != null) {
+      if (Build.VERSION.SDK_INT >= 31) {
+        List<SpellCheckerInfo> enabledSpellCheckerInfos =
+            textServicesManager.getEnabledSpellCheckerInfos();
+        boolean gboardSpellCheckerEnabled =
+            enabledSpellCheckerInfos.stream()
+                .anyMatch(
+                    spellCheckerInfo ->
+                        spellCheckerInfo
+                            .getPackageName()
+                            .equals("com.google.android.inputmethod.latin"));
+
+        // Checks if enabled spell checker is the one that is suppported by Gboard, which is
+        // the one Flutter supports by default.
+        isNativeSpellCheckServiceDefined =
+            textServicesManager.isSpellCheckerEnabled() && gboardSpellCheckerEnabled;
+      } else {
+        isNativeSpellCheckServiceDefined = true;
+      }
+    }
+
     flutterEngine
         .getSettingsChannel()
         .startMessage()
         .setTextScaleFactor(getResources().getConfiguration().fontScale)
+        .setNativeSpellCheckServiceDefined(isNativeSpellCheckServiceDefined)
+        .setBrieflyShowPassword(
+            Settings.System.getInt(
+                    getContext().getContentResolver(), Settings.System.TEXT_SHOW_PASSWORD, 1)
+                == 1)
         .setUse24HourFormat(DateFormat.is24HourFormat(getContext()))
         .setPlatformBrightness(brightness)
         .send();
@@ -1405,13 +1493,13 @@ public class FlutterView extends FrameLayout implements MouseCursorPlugin.MouseC
   }
 
   @Override
-  public void onProvideAutofillVirtualStructure(ViewStructure structure, int flags) {
+  public void onProvideAutofillVirtualStructure(@NonNull ViewStructure structure, int flags) {
     super.onProvideAutofillVirtualStructure(structure, flags);
     textInputPlugin.onProvideAutofillVirtualStructure(structure, flags);
   }
 
   @Override
-  public void autofill(SparseArray<AutofillValue> values) {
+  public void autofill(@NonNull SparseArray<AutofillValue> values) {
     textInputPlugin.autofill(values);
   }
 

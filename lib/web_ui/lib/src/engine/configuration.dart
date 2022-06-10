@@ -32,7 +32,7 @@ import 'package:js/js.dart';
 /// The version of CanvasKit used by the web engine by default.
 // DO NOT EDIT THE NEXT LINE OF CODE MANUALLY
 // See `lib/web_ui/README.md` for how to roll CanvasKit to a new version.
-const String _canvaskitVersion = '0.31.0';
+const String _canvaskitVersion = '0.33.0';
 
 /// The Web Engine configuration for the current application.
 FlutterConfiguration get configuration => _configuration ??= FlutterConfiguration(_jsConfiguration);
@@ -162,10 +162,19 @@ external JsFlutterConfiguration? get _jsConfiguration;
 
 /// The JS bindings for the object that's set as `window.flutterConfiguration`.
 @JS()
-@anonymous
-class JsFlutterConfiguration {
+@staticInterop
+class JsFlutterConfiguration {}
+
+extension JsFlutterConfigurationExtension on JsFlutterConfiguration {
   external String? get canvasKitBaseUrl;
   external bool? get canvasKitForceCpuOnly;
-  external int? get canvasKitMaximumSurfaces;
   external bool? get debugShowSemanticsNodes;
+
+  external int? get canvasKitMaximumSurfaces;
+  external set canvasKitMaximumSurfaces(int? maxSurfaces);
 }
+
+/// A JavaScript entrypoint that allows developer to set rendering backend
+/// at runtime before launching the application.
+@JS('window.flutterWebRenderer')
+external String? get requestedRendererType;

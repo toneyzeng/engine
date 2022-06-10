@@ -3,8 +3,8 @@ package io.flutter.embedding.android;
 import static junit.framework.TestCase.assertEquals;
 import static junit.framework.TestCase.assertFalse;
 import static junit.framework.TestCase.assertTrue;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyInt;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -28,6 +28,7 @@ import android.media.Image;
 import android.media.Image.Plane;
 import android.media.ImageReader;
 import android.os.Build;
+import android.provider.Settings;
 import android.view.DisplayCutout;
 import android.view.Surface;
 import android.view.View;
@@ -36,9 +37,10 @@ import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import androidx.core.util.Consumer;
+import androidx.test.core.app.ApplicationProvider;
+import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.window.layout.FoldingFeature;
 import androidx.window.layout.WindowLayoutInfo;
-import io.flutter.TestUtils;
 import io.flutter.embedding.engine.FlutterEngine;
 import io.flutter.embedding.engine.FlutterJNI;
 import io.flutter.embedding.engine.loader.FlutterLoader;
@@ -58,8 +60,6 @@ import org.mockito.Spy;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import org.robolectric.Robolectric;
-import org.robolectric.RobolectricTestRunner;
-import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.Implementation;
@@ -67,24 +67,24 @@ import org.robolectric.annotation.Implements;
 import org.robolectric.shadows.ShadowDisplay;
 
 @Config(manifest = Config.NONE)
-@RunWith(RobolectricTestRunner.class)
+@RunWith(AndroidJUnit4.class)
 @TargetApi(30)
 public class FlutterViewTest {
+  private final Context ctx = ApplicationProvider.getApplicationContext();
   @Mock FlutterJNI mockFlutterJni;
   @Mock FlutterLoader mockFlutterLoader;
   @Spy PlatformViewsController platformViewsController;
 
   @Before
   public void setUp() {
-    MockitoAnnotations.initMocks(this);
+    MockitoAnnotations.openMocks(this);
     when(mockFlutterJni.isAttached()).thenReturn(true);
   }
 
   @Test
   public void attachToFlutterEngine_alertsPlatformViews() {
     FlutterView flutterView = new FlutterView(Robolectric.setupActivity(Activity.class));
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     when(flutterEngine.getPlatformViewsController()).thenReturn(platformViewsController);
 
     flutterView.attachToFlutterEngine(flutterEngine);
@@ -95,8 +95,7 @@ public class FlutterViewTest {
   @Test
   public void detachFromFlutterEngine_alertsPlatformViews() {
     FlutterView flutterView = new FlutterView(Robolectric.setupActivity(Activity.class));
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     when(flutterEngine.getPlatformViewsController()).thenReturn(platformViewsController);
 
     flutterView.attachToFlutterEngine(flutterEngine);
@@ -108,8 +107,7 @@ public class FlutterViewTest {
   @Test
   public void detachFromFlutterEngine_turnsOffA11y() {
     FlutterView flutterView = new FlutterView(Robolectric.setupActivity(Activity.class));
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -121,9 +119,8 @@ public class FlutterViewTest {
 
   @Test
   public void detachFromFlutterEngine_revertImageView() {
-    FlutterView flutterView = new FlutterView(RuntimeEnvironment.application);
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterView flutterView = new FlutterView(ctx);
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
 
     flutterView.attachToFlutterEngine(flutterEngine);
     assertFalse(flutterView.renderSurface instanceof FlutterImageView);
@@ -136,12 +133,53 @@ public class FlutterViewTest {
   }
 
   @Test
+  public void detachFromFlutterEngine_removeImageView() {
+    FlutterView flutterView = new FlutterView(ctx);
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
+
+    flutterView.attachToFlutterEngine(flutterEngine);
+    flutterView.convertToImageView();
+    assertEquals(flutterView.getChildCount(), 2);
+    View view = flutterView.getChildAt(1);
+    assertTrue(view instanceof FlutterImageView);
+
+    flutterView.detachFromFlutterEngine();
+    assertEquals(flutterView.getChildCount(), 1);
+    view = flutterView.getChildAt(0);
+    assertFalse(view instanceof FlutterImageView);
+  }
+
+  @Test
+  public void detachFromFlutterEngine_closesImageView() {
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
+
+    FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
+    when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
+
+    FlutterImageView imageViewMock = mock(FlutterImageView.class);
+    when(imageViewMock.getAttachedRenderer()).thenReturn(flutterRenderer);
+
+    FlutterView flutterView = spy(new FlutterView(ctx));
+    when(flutterView.createImageView()).thenReturn(imageViewMock);
+
+    flutterView.attachToFlutterEngine(flutterEngine);
+
+    assertFalse(flutterView.renderSurface == imageViewMock);
+
+    flutterView.convertToImageView();
+    assertTrue(flutterView.renderSurface == imageViewMock);
+
+    flutterView.detachFromFlutterEngine();
+    assertFalse(flutterView.renderSurface == imageViewMock);
+    verify(imageViewMock, times(1)).closeImageReader();
+  }
+
+  @Test
   public void onConfigurationChanged_fizzlesWhenNullEngine() {
     FlutterView flutterView = new FlutterView(Robolectric.setupActivity(Activity.class));
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
 
-    Configuration configuration = RuntimeEnvironment.application.getResources().getConfiguration();
+    Configuration configuration = ctx.getResources().getConfiguration();
     // 1 invocation of channels.
     flutterView.attachToFlutterEngine(flutterEngine);
     flutterView.onConfigurationChanged(configuration);
@@ -163,12 +201,15 @@ public class FlutterViewTest {
 
     // FYI - The default brightness is LIGHT, which is why we don't need to configure it.
     FlutterView flutterView = new FlutterView(Robolectric.setupActivity(Activity.class));
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
 
     SettingsChannel fakeSettingsChannel = mock(SettingsChannel.class);
     SettingsChannel.MessageBuilder fakeMessageBuilder = mock(SettingsChannel.MessageBuilder.class);
     when(fakeMessageBuilder.setTextScaleFactor(any(Float.class))).thenReturn(fakeMessageBuilder);
+    when(fakeMessageBuilder.setNativeSpellCheckServiceDefined(any(Boolean.class)))
+        .thenReturn(fakeMessageBuilder);
+    when(fakeMessageBuilder.setBrieflyShowPassword(any(Boolean.class)))
+        .thenReturn(fakeMessageBuilder);
     when(fakeMessageBuilder.setUse24HourFormat(any(Boolean.class))).thenReturn(fakeMessageBuilder);
     when(fakeMessageBuilder.setPlatformBrightness(any(SettingsChannel.PlatformBrightness.class)))
         .thenAnswer(
@@ -212,12 +253,15 @@ public class FlutterViewTest {
     when(spiedResources.getConfiguration()).thenReturn(spiedConfiguration);
 
     FlutterView flutterView = new FlutterView(spiedContext);
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
 
     SettingsChannel fakeSettingsChannel = mock(SettingsChannel.class);
     SettingsChannel.MessageBuilder fakeMessageBuilder = mock(SettingsChannel.MessageBuilder.class);
     when(fakeMessageBuilder.setTextScaleFactor(any(Float.class))).thenReturn(fakeMessageBuilder);
+    when(fakeMessageBuilder.setNativeSpellCheckServiceDefined(any(Boolean.class)))
+        .thenReturn(fakeMessageBuilder);
+    when(fakeMessageBuilder.setBrieflyShowPassword(any(Boolean.class)))
+        .thenReturn(fakeMessageBuilder);
     when(fakeMessageBuilder.setUse24HourFormat(any(Boolean.class))).thenReturn(fakeMessageBuilder);
     when(fakeMessageBuilder.setPlatformBrightness(any(SettingsChannel.PlatformBrightness.class)))
         .thenAnswer(
@@ -241,6 +285,77 @@ public class FlutterViewTest {
     assertEquals(SettingsChannel.PlatformBrightness.dark, reportedBrightness.get());
   }
 
+  @Test
+  public void itSendsTextShowPasswordToFrameworkOnAttach() {
+    // Setup test.
+    AtomicReference<Boolean> reportedShowPassword = new AtomicReference<>();
+
+    FlutterView flutterView = new FlutterView(Robolectric.setupActivity(Activity.class));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
+    Settings.System.putInt(
+        flutterView.getContext().getContentResolver(), Settings.System.TEXT_SHOW_PASSWORD, 1);
+
+    SettingsChannel fakeSettingsChannel = mock(SettingsChannel.class);
+    SettingsChannel.MessageBuilder fakeMessageBuilder = mock(SettingsChannel.MessageBuilder.class);
+    when(fakeMessageBuilder.setTextScaleFactor(any(Float.class))).thenReturn(fakeMessageBuilder);
+    when(fakeMessageBuilder.setNativeSpellCheckServiceDefined(any(Boolean.class)))
+        .thenReturn(fakeMessageBuilder);
+    when(fakeMessageBuilder.setPlatformBrightness(any(SettingsChannel.PlatformBrightness.class)))
+        .thenReturn(fakeMessageBuilder);
+    when(fakeMessageBuilder.setUse24HourFormat(any(Boolean.class))).thenReturn(fakeMessageBuilder);
+    when(fakeMessageBuilder.setBrieflyShowPassword(any(Boolean.class)))
+        .thenAnswer(
+            new Answer<SettingsChannel.MessageBuilder>() {
+              @Override
+              public SettingsChannel.MessageBuilder answer(InvocationOnMock invocation)
+                  throws Throwable {
+                reportedShowPassword.set((Boolean) invocation.getArguments()[0]);
+                return fakeMessageBuilder;
+              }
+            });
+    when(fakeSettingsChannel.startMessage()).thenReturn(fakeMessageBuilder);
+    when(flutterEngine.getSettingsChannel()).thenReturn(fakeSettingsChannel);
+
+    flutterView.attachToFlutterEngine(flutterEngine);
+
+    // Verify results.
+    assertTrue(reportedShowPassword.get());
+  }
+
+  public void itSendsTextHidePasswordToFrameworkOnAttach() {
+    // Setup test.
+    AtomicReference<Boolean> reportedShowPassword = new AtomicReference<>();
+
+    FlutterView flutterView = new FlutterView(Robolectric.setupActivity(Activity.class));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
+    Settings.System.putInt(
+        flutterView.getContext().getContentResolver(), Settings.System.TEXT_SHOW_PASSWORD, 0);
+
+    SettingsChannel fakeSettingsChannel = mock(SettingsChannel.class);
+    SettingsChannel.MessageBuilder fakeMessageBuilder = mock(SettingsChannel.MessageBuilder.class);
+    when(fakeMessageBuilder.setTextScaleFactor(any(Float.class))).thenReturn(fakeMessageBuilder);
+    when(fakeMessageBuilder.setPlatformBrightness(any(SettingsChannel.PlatformBrightness.class)))
+        .thenReturn(fakeMessageBuilder);
+    when(fakeMessageBuilder.setUse24HourFormat(any(Boolean.class))).thenReturn(fakeMessageBuilder);
+    when(fakeMessageBuilder.setBrieflyShowPassword(any(Boolean.class)))
+        .thenAnswer(
+            new Answer<SettingsChannel.MessageBuilder>() {
+              @Override
+              public SettingsChannel.MessageBuilder answer(InvocationOnMock invocation)
+                  throws Throwable {
+                reportedShowPassword.set((Boolean) invocation.getArguments()[0]);
+                return fakeMessageBuilder;
+              }
+            });
+    when(fakeSettingsChannel.startMessage()).thenReturn(fakeMessageBuilder);
+    when(flutterEngine.getSettingsChannel()).thenReturn(fakeSettingsChannel);
+
+    flutterView.attachToFlutterEngine(flutterEngine);
+
+    // Verify results.
+    assertFalse(reportedShowPassword.get());
+  }
+
   // This test uses the API 30+ Algorithm for window insets. The legacy algorithm is
   // set to -1 values, so it is clear if the wrong algorithm is used.
   @Test
@@ -253,8 +368,7 @@ public class FlutterViewTest {
       })
   public void setPaddingTopToZeroForFullscreenMode() {
     FlutterView flutterView = new FlutterView(Robolectric.setupActivity(Activity.class));
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -293,8 +407,7 @@ public class FlutterViewTest {
       })
   public void setPaddingTopToZeroForFullscreenModeLegacy() {
     FlutterView flutterView = new FlutterView(Robolectric.setupActivity(Activity.class));
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -327,8 +440,7 @@ public class FlutterViewTest {
     FlutterView flutterView = new FlutterView(Robolectric.setupActivity(Activity.class));
     assertEquals(0, flutterView.getSystemUiVisibility());
 
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -366,8 +478,7 @@ public class FlutterViewTest {
     FlutterView flutterView = new FlutterView(Robolectric.setupActivity(Activity.class));
     assertEquals(0, flutterView.getSystemUiVisibility());
 
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -392,18 +503,16 @@ public class FlutterViewTest {
   }
 
   @Test
-  @Config(minSdk = 23, maxSdk = 29)
+  @Config(minSdk = 23, maxSdk = 29, qualifiers = "land")
   public void systemInsetHandlesFullscreenNavbarRight() {
-    RuntimeEnvironment.setQualifiers("+land");
-    FlutterView flutterView = spy(new FlutterView(RuntimeEnvironment.systemContext));
+    FlutterView flutterView = spy(new FlutterView(ctx));
     setExpectedDisplayRotation(Surface.ROTATION_90);
     assertEquals(0, flutterView.getSystemUiVisibility());
     when(flutterView.getWindowSystemUiVisibility())
         .thenReturn(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
-    when(flutterView.getContext()).thenReturn(RuntimeEnvironment.systemContext);
+    when(flutterView.getContext()).thenReturn(ctx);
 
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -430,18 +539,16 @@ public class FlutterViewTest {
   }
 
   @Test
-  @Config(minSdk = 20, maxSdk = 22)
+  @Config(minSdk = 20, maxSdk = 22, qualifiers = "land")
   public void systemInsetHandlesFullscreenNavbarRightBelowSDK23() {
-    RuntimeEnvironment.setQualifiers("+land");
-    FlutterView flutterView = spy(new FlutterView(RuntimeEnvironment.systemContext));
+    FlutterView flutterView = spy(new FlutterView(ctx));
     setExpectedDisplayRotation(Surface.ROTATION_270);
     assertEquals(0, flutterView.getSystemUiVisibility());
     when(flutterView.getWindowSystemUiVisibility())
         .thenReturn(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
-    when(flutterView.getContext()).thenReturn(RuntimeEnvironment.systemContext);
+    when(flutterView.getContext()).thenReturn(ctx);
 
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -468,18 +575,16 @@ public class FlutterViewTest {
   }
 
   @Test
-  @Config(minSdk = 23, maxSdk = 29)
+  @Config(minSdk = 23, maxSdk = 29, qualifiers = "land")
   public void systemInsetHandlesFullscreenNavbarLeft() {
-    RuntimeEnvironment.setQualifiers("+land");
-    FlutterView flutterView = spy(new FlutterView(RuntimeEnvironment.systemContext));
+    FlutterView flutterView = spy(new FlutterView(ctx));
     setExpectedDisplayRotation(Surface.ROTATION_270);
     assertEquals(0, flutterView.getSystemUiVisibility());
     when(flutterView.getWindowSystemUiVisibility())
         .thenReturn(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
-    when(flutterView.getContext()).thenReturn(RuntimeEnvironment.systemContext);
+    when(flutterView.getContext()).thenReturn(ctx);
 
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -509,18 +614,16 @@ public class FlutterViewTest {
   // set to -1 values, so it is clear if the wrong algorithm is used.
   @Test
   @TargetApi(30)
-  @Config(sdk = 30)
+  @Config(sdk = 30, qualifiers = "land")
   public void systemInsetGetInsetsFullscreen() {
-    RuntimeEnvironment.setQualifiers("+land");
-    FlutterView flutterView = spy(new FlutterView(RuntimeEnvironment.systemContext));
+    FlutterView flutterView = spy(new FlutterView(ctx));
     setExpectedDisplayRotation(Surface.ROTATION_270);
     assertEquals(0, flutterView.getSystemUiVisibility());
     when(flutterView.getWindowSystemUiVisibility())
         .thenReturn(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
-    when(flutterView.getContext()).thenReturn(RuntimeEnvironment.systemContext);
+    when(flutterView.getContext()).thenReturn(ctx);
 
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -547,18 +650,16 @@ public class FlutterViewTest {
   // This test uses the pre-API 30 Algorithm for window insets.
   @Test
   @TargetApi(28)
-  @Config(sdk = 28)
+  @Config(sdk = 28, qualifiers = "land")
   public void systemInsetGetInsetsFullscreenLegacy() {
-    RuntimeEnvironment.setQualifiers("+land");
-    FlutterView flutterView = spy(new FlutterView(RuntimeEnvironment.systemContext));
+    FlutterView flutterView = spy(new FlutterView(ctx));
     setExpectedDisplayRotation(Surface.ROTATION_270);
     assertEquals(0, flutterView.getSystemUiVisibility());
     when(flutterView.getWindowSystemUiVisibility())
         .thenReturn(View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION);
-    when(flutterView.getContext()).thenReturn(RuntimeEnvironment.systemContext);
+    when(flutterView.getContext()).thenReturn(ctx);
 
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -587,16 +688,14 @@ public class FlutterViewTest {
   // set to -1 values, so it is clear if the wrong algorithm is used.
   @Test
   @TargetApi(30)
-  @Config(sdk = 30)
+  @Config(sdk = 30, qualifiers = "land")
   public void systemInsetDisplayCutoutSimple() {
-    RuntimeEnvironment.setQualifiers("+land");
-    FlutterView flutterView = spy(new FlutterView(RuntimeEnvironment.systemContext));
+    FlutterView flutterView = spy(new FlutterView(ctx));
     assertEquals(0, flutterView.getSystemUiVisibility());
     when(flutterView.getWindowSystemUiVisibility()).thenReturn(0);
-    when(flutterView.getContext()).thenReturn(RuntimeEnvironment.systemContext);
+    when(flutterView.getContext()).thenReturn(ctx);
 
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -639,9 +738,7 @@ public class FlutterViewTest {
     FlutterView flutterView = spy(new FlutterView(context));
     ShadowDisplay display =
         Shadows.shadowOf(
-            ((WindowManager)
-                    RuntimeEnvironment.systemContext.getSystemService(Context.WINDOW_SERVICE))
-                .getDefaultDisplay());
+            ((WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay());
     WindowInfoRepositoryCallbackAdapterWrapper windowInfoRepo =
         mock(WindowInfoRepositoryCallbackAdapterWrapper.class);
     // For reasoning behing using doReturn instead of when, read "Important gotcha" at
@@ -667,15 +764,12 @@ public class FlutterViewTest {
     FlutterView flutterView = spy(new FlutterView(context));
     ShadowDisplay display =
         Shadows.shadowOf(
-            ((WindowManager)
-                    RuntimeEnvironment.systemContext.getSystemService(Context.WINDOW_SERVICE))
-                .getDefaultDisplay());
+            ((WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay());
     when(flutterView.getContext()).thenReturn(context);
     WindowInfoRepositoryCallbackAdapterWrapper windowInfoRepo =
         mock(WindowInfoRepositoryCallbackAdapterWrapper.class);
     doReturn(windowInfoRepo).when(flutterView).createWindowInfoRepo();
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -717,11 +811,7 @@ public class FlutterViewTest {
     when(mockReader.getMaxImages()).thenReturn(2);
 
     final FlutterImageView imageView =
-        spy(
-            new FlutterImageView(
-                RuntimeEnvironment.application,
-                mockReader,
-                FlutterImageView.SurfaceKind.background));
+        spy(new FlutterImageView(ctx, mockReader, FlutterImageView.SurfaceKind.background));
 
     final FlutterJNI jni = mock(FlutterJNI.class);
     imageView.attachToRenderer(new FlutterRenderer(jni));
@@ -754,11 +844,7 @@ public class FlutterViewTest {
         .thenReturn(mockImage);
 
     final FlutterImageView imageView =
-        spy(
-            new FlutterImageView(
-                RuntimeEnvironment.application,
-                mockReader,
-                FlutterImageView.SurfaceKind.background));
+        spy(new FlutterImageView(ctx, mockReader, FlutterImageView.SurfaceKind.background));
 
     final FlutterJNI jni = mock(FlutterJNI.class);
     imageView.attachToRenderer(new FlutterRenderer(jni));
@@ -792,11 +878,7 @@ public class FlutterViewTest {
     when(mockReader.acquireLatestImage()).thenReturn(mockImage);
 
     final FlutterImageView imageView =
-        spy(
-            new FlutterImageView(
-                RuntimeEnvironment.application,
-                mockReader,
-                FlutterImageView.SurfaceKind.background));
+        spy(new FlutterImageView(ctx, mockReader, FlutterImageView.SurfaceKind.background));
 
     final FlutterJNI jni = mock(FlutterJNI.class);
     imageView.attachToRenderer(new FlutterRenderer(jni));
@@ -818,11 +900,7 @@ public class FlutterViewTest {
     when(mockReader.getMaxImages()).thenReturn(2);
 
     final FlutterImageView imageView =
-        spy(
-            new FlutterImageView(
-                RuntimeEnvironment.application,
-                mockReader,
-                FlutterImageView.SurfaceKind.background));
+        spy(new FlutterImageView(ctx, mockReader, FlutterImageView.SurfaceKind.background));
 
     final FlutterJNI jni = mock(FlutterJNI.class);
     imageView.attachToRenderer(new FlutterRenderer(jni));
@@ -838,9 +916,21 @@ public class FlutterViewTest {
   }
 
   @Test
+  public void flutterImageView_closesReader() {
+    final ImageReader mockReader = mock(ImageReader.class);
+    when(mockReader.getMaxImages()).thenReturn(1);
+
+    final FlutterImageView imageView =
+        spy(new FlutterImageView(ctx, mockReader, FlutterImageView.SurfaceKind.background));
+
+    imageView.closeImageReader();
+    verify(mockReader, times(1)).close();
+  }
+
+  @Test
   public void flutterSurfaceView_GathersTransparentRegion() {
     final Region mockRegion = mock(Region.class);
-    final FlutterSurfaceView surfaceView = new FlutterSurfaceView(RuntimeEnvironment.application);
+    final FlutterSurfaceView surfaceView = new FlutterSurfaceView(ctx);
 
     surfaceView.setAlpha(0.0f);
     assertFalse(surfaceView.gatherTransparentRegion(mockRegion));
@@ -853,10 +943,9 @@ public class FlutterViewTest {
 
   @Test
   @SuppressLint("PrivateApi")
+  @Config(sdk = Build.VERSION_CODES.P)
   public void findViewByAccessibilityIdTraversal_returnsRootViewOnAndroid28() throws Exception {
-    TestUtils.setApiVersion(28);
-
-    FlutterView flutterView = new FlutterView(RuntimeEnvironment.application);
+    FlutterView flutterView = new FlutterView(ctx);
 
     Method getAccessibilityViewIdMethod = View.class.getDeclaredMethod("getAccessibilityViewId");
     Integer accessibilityViewId = (Integer) getAccessibilityViewIdMethod.invoke(flutterView);
@@ -865,15 +954,14 @@ public class FlutterViewTest {
   }
 
   @Test
+  @Config(sdk = Build.VERSION_CODES.P)
   @SuppressLint("PrivateApi")
   public void findViewByAccessibilityIdTraversal_returnsChildViewOnAndroid28() throws Exception {
-    TestUtils.setApiVersion(28);
-
-    FlutterView flutterView = new FlutterView(RuntimeEnvironment.application);
-    FrameLayout childView1 = new FrameLayout(RuntimeEnvironment.application);
+    FlutterView flutterView = new FlutterView(ctx);
+    FrameLayout childView1 = new FrameLayout(ctx);
     flutterView.addView(childView1);
 
-    FrameLayout childView2 = new FrameLayout(RuntimeEnvironment.application);
+    FrameLayout childView2 = new FrameLayout(ctx);
     childView1.addView(childView2);
 
     Method getAccessibilityViewIdMethod = View.class.getDeclaredMethod("getAccessibilityViewId");
@@ -883,11 +971,10 @@ public class FlutterViewTest {
   }
 
   @Test
+  @Config(sdk = Build.VERSION_CODES.Q)
   @SuppressLint("PrivateApi")
   public void findViewByAccessibilityIdTraversal_returnsRootViewOnAndroid29() throws Exception {
-    TestUtils.setApiVersion(29);
-
-    FlutterView flutterView = new FlutterView(RuntimeEnvironment.application);
+    FlutterView flutterView = new FlutterView(ctx);
 
     Method getAccessibilityViewIdMethod = View.class.getDeclaredMethod("getAccessibilityViewId");
     Integer accessibilityViewId = (Integer) getAccessibilityViewIdMethod.invoke(flutterView);
@@ -895,10 +982,17 @@ public class FlutterViewTest {
     assertEquals(null, flutterView.findViewByAccessibilityIdTraversal(accessibilityViewId));
   }
 
+  @Test
+  public void flutterSplashView_itDoesNotCrashOnRestoreInstanceState() {
+    final FlutterSplashView splashView = new FlutterSplashView(ctx);
+    splashView.onRestoreInstanceState(View.BaseSavedState.EMPTY_STATE);
+    // It should not crash and "splashScreenState" should be null.
+    assertEquals(null, splashView.splashScreenState);
+  }
+
   public void ViewportMetrics_initializedPhysicalTouchSlop() {
-    FlutterView flutterView = new FlutterView(RuntimeEnvironment.application);
-    FlutterEngine flutterEngine =
-        spy(new FlutterEngine(RuntimeEnvironment.application, mockFlutterLoader, mockFlutterJni));
+    FlutterView flutterView = new FlutterView(ctx);
+    FlutterEngine flutterEngine = spy(new FlutterEngine(ctx, mockFlutterLoader, mockFlutterJni));
     FlutterRenderer flutterRenderer = spy(new FlutterRenderer(mockFlutterJni));
     when(flutterEngine.getRenderer()).thenReturn(flutterRenderer);
 
@@ -913,9 +1007,7 @@ public class FlutterViewTest {
   private void setExpectedDisplayRotation(int rotation) {
     ShadowDisplay display =
         Shadows.shadowOf(
-            ((WindowManager)
-                    RuntimeEnvironment.systemContext.getSystemService(Context.WINDOW_SERVICE))
-                .getDefaultDisplay());
+            ((WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay());
     display.setRotation(rotation);
   }
 

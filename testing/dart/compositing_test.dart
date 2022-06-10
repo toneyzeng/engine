@@ -8,6 +8,35 @@ import 'dart:ui';
 import 'package:litetest/litetest.dart';
 
 void main() {
+  test('addPicture with disposed picture does not crash', () {
+    bool assertsEnabled = false;
+    assert(() {
+      assertsEnabled = true;
+      return true;
+    }());
+    final PictureRecorder recorder = PictureRecorder();
+    final Canvas canvas = Canvas(recorder);
+    canvas.drawPaint(Paint());
+    final Picture picture = recorder.endRecording();
+    picture.dispose();
+
+    assert(picture.debugDisposed);
+
+    final SceneBuilder builder = SceneBuilder();
+    if (assertsEnabled) {
+      expect(
+        () => builder.addPicture(Offset.zero, picture),
+        throwsA(isInstanceOf<AssertionError>()),
+      );
+    } else {
+      builder.addPicture(Offset.zero, picture);
+    }
+
+    final Scene scene = builder.build();
+    expect(scene != null, true);
+    scene.dispose();
+  });
+
   test('pushTransform validates the matrix', () {
     final SceneBuilder builder = SceneBuilder();
     final Float64List matrix4 = Float64List.fromList(<double>[
@@ -362,6 +391,18 @@ void main() {
     testNoSharing((SceneBuilder builder, EngineLayer? oldLayer) {
       return builder.pushImageFilter(
         ImageFilter.blur(sigmaX: 10.0, sigmaY: 10.0),
+        oldLayer: oldLayer as ImageFilterEngineLayer?,
+      );
+    });
+    testNoSharing((SceneBuilder builder, EngineLayer? oldLayer) {
+      return builder.pushImageFilter(
+        ImageFilter.dilate(radiusX: 10.0, radiusY: 10.0),
+        oldLayer: oldLayer as ImageFilterEngineLayer?,
+      );
+    });
+    testNoSharing((SceneBuilder builder, EngineLayer? oldLayer) {
+      return builder.pushImageFilter(
+        ImageFilter.erode(radiusX: 10.0, radiusY: 10.0),
         oldLayer: oldLayer as ImageFilterEngineLayer?,
       );
     });

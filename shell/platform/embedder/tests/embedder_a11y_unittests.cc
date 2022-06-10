@@ -16,12 +16,15 @@
 #include "flutter/shell/platform/embedder/tests/embedder_config_builder.h"
 #include "flutter/testing/testing.h"
 
+// CREATE_NATIVE_ENTRY is leaky by design
+// NOLINTBEGIN(clang-analyzer-core.StackAddressEscape)
+
 namespace flutter {
 namespace testing {
 
-using Embedder11yTest = testing::EmbedderTest;
+using EmbedderA11yTest = testing::EmbedderTest;
 
-TEST_F(Embedder11yTest, A11yTreeIsConsistent) {
+TEST_F(EmbedderA11yTest, A11yTreeIsConsistent) {
   auto& context = GetEmbedderContext(EmbedderTestContextType::kOpenGLContext);
 
   fml::AutoResetWaitableEvent latch;
@@ -204,3 +207,5 @@ TEST_F(Embedder11yTest, A11yTreeIsConsistent) {
 
 }  // namespace testing
 }  // namespace flutter
+
+// NOLINTEND(clang-analyzer-core.StackAddressEscape)

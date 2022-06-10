@@ -19,7 +19,9 @@ void main() {
   internalBootstrapBrowserTest(() => testMain);
 }
 
-void testMain() {
+Future<void> testMain() async {
+  await ui.webOnlyInitializePlatform();
+
   test('onTextScaleFactorChanged preserves the zone', () {
     final Zone innerZone = Zone.current.fork();
 
@@ -326,7 +328,7 @@ void testMain() {
       localeChangedCount += 1;
     };
 
-    ensureDomRendererInitialized();
+    ensureFlutterViewEmbedderInitialized();
 
     // We populate the initial list of locales automatically (only test that we
     // got some locales; some contributors may be in different locales, so we

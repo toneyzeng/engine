@@ -10,8 +10,8 @@
 #include "flutter/fml/logging.h"
 #include "flutter/fml/platform/darwin/string_range_sanitization.h"
 
-static const char _kTextAffinityDownstream[] = "TextAffinity.downstream";
-static const char _kTextAffinityUpstream[] = "TextAffinity.upstream";
+static const char kTextAffinityDownstream[] = "TextAffinity.downstream";
+static const char kTextAffinityUpstream[] = "TextAffinity.upstream";
 // A delay before enabling the accessibility of FlutterTextInputView after
 // it is activated.
 static constexpr double kUITextInputAccessibilityEnablingDelaySeconds = 0.5;
@@ -39,12 +39,14 @@ const CGRect kSpacePanBounds = {{-2500, -2500}, {5000, 5000}};
 static NSString* const kShowMethod = @"TextInput.show";
 static NSString* const kHideMethod = @"TextInput.hide";
 static NSString* const kSetClientMethod = @"TextInput.setClient";
+static NSString* const kSetPlatformViewClientMethod = @"TextInput.setPlatformViewClient";
 static NSString* const kSetEditingStateMethod = @"TextInput.setEditingState";
 static NSString* const kClearClientMethod = @"TextInput.clearClient";
 static NSString* const kSetEditableSizeAndTransformMethod =
     @"TextInput.setEditableSizeAndTransform";
 static NSString* const kSetMarkedTextRectMethod = @"TextInput.setMarkedTextRect";
 static NSString* const kFinishAutofillContextMethod = @"TextInput.finishAutofillContext";
+static NSString* const kSetSelectionRectsMethod = @"TextInput.setSelectionRects";
 
 #pragma mark - TextInputConfiguration Field Names
 static NSString* const kSecureTextEntry = @"obscureText";
@@ -52,6 +54,7 @@ static NSString* const kKeyboardType = @"inputType";
 static NSString* const kKeyboardAppearance = @"keyboardAppearance";
 static NSString* const kInputAction = @"inputAction";
 static NSString* const kEnableDeltaModel = @"enableDeltaModel";
+static NSString* const kEnableInteractiveSelection = @"enableInteractiveSelection";
 
 static NSString* const kSmartDashesType = @"smartDashesType";
 static NSString* const kSmartQuotesType = @"smartQuotesType";
@@ -467,17 +470,6 @@ static BOOL IsSelectionRectCloserToPoint(CGPoint point,
                                  (isBelowBottomOfLine && isFartherToRight))));
 }
 
-// Checks whether Scribble features are possibly available – meaning this is an iPad running iOS
-// 14 or higher.
-static BOOL IsScribbleAvailable() {
-  if (@available(iOS 14.0, *)) {
-    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
-      return YES;
-    }
-  }
-  return NO;
-}
-
 #pragma mark - FlutterTextPosition
 
 @implementation FlutterTextPosition
@@ -710,13 +702,17 @@ static BOOL IsScribbleAvailable() {
 
 @end
 
+@interface FlutterTextInputPlugin ()
+@property(nonatomic, readonly) fml::WeakPtr<FlutterTextInputPlugin> weakPtr;
+@property(nonatomic, readonly) id<FlutterTextInputDelegate> textInputDelegate;
+@end
+
 @interface FlutterTextInputView ()
 @property(nonatomic, copy) NSString* autofillId;
 @property(nonatomic, readonly) CATransform3D editableTransform;
 @property(nonatomic, assign) CGRect markedRect;
 @property(nonatomic) BOOL isVisibleToAutofill;
 @property(nonatomic, assign) BOOL accessibilityEnabled;
-@property(nonatomic, retain) UITextInteraction* textInteraction API_AVAILABLE(ios(13.0));
 
 - (void)setEditableTransform:(NSArray*)matrix;
 @end
@@ -734,18 +730,22 @@ static BOOL IsScribbleAvailable() {
   // when the app shows its own in-flutter keyboard.
   bool _isSystemKeyboardEnabled;
   bool _isFloatingCursorActive;
+  fml::WeakPtr<FlutterTextInputPlugin> _textInputPlugin;
   // The view has reached end of life, and is no longer
   // allowed to access its textInputDelegate.
   BOOL _decommissioned;
+  bool _enableInteractiveSelection;
+  UITextInteraction* _textInteraction API_AVAILABLE(ios(13.0));
 }
 
 @synthesize tokenizer = _tokenizer;
 
-- (instancetype)init {
-  self = [super init];
+- (instancetype)initWithOwner:(FlutterTextInputPlugin*)textInputPlugin {
+  self = [super initWithFrame:CGRectZero];
   if (self) {
+    _textInputPlugin = textInputPlugin.weakPtr;
     _textInputClient = 0;
-    _selectionAffinity = _kTextAffinityUpstream;
+    _selectionAffinity = kTextAffinityUpstream;
 
     // UITextInput
     _text = [[NSMutableString alloc] init];
@@ -769,6 +769,7 @@ static BOOL IsScribbleAvailable() {
     _returnKeyType = UIReturnKeyDone;
     _secureTextEntry = NO;
     _enableDeltaModel = NO;
+    _enableInteractiveSelection = YES;
     _accessibilityEnabled = NO;
     _decommissioned = NO;
     if (@available(iOS 11.0, *)) {
@@ -800,7 +801,7 @@ static BOOL IsScribbleAvailable() {
   self.keyboardType = ToUIKeyboardType(inputType);
   self.returnKeyType = ToUIReturnKeyType(configuration[kInputAction]);
   self.autocapitalizationType = ToUITextAutoCapitalizationType(configuration);
-
+  _enableInteractiveSelection = [configuration[kEnableInteractiveSelection] boolValue];
   if (@available(iOS 11.0, *)) {
     NSString* smartDashesType = configuration[kSmartDashesType];
     // This index comes from the SmartDashesType enum in the framework.
@@ -870,7 +871,7 @@ static BOOL IsScribbleAvailable() {
 }
 
 - (id<FlutterTextInputDelegate>)textInputDelegate {
-  return _decommissioned ? nil : _textInputDelegate;
+  return _textInputPlugin.get().textInputDelegate;
 }
 
 // Declares that the view has reached end of life, and
@@ -906,7 +907,27 @@ static BOOL IsScribbleAvailable() {
   _hasPlaceholder = NO;
 }
 
+- (UITextInteraction*)textInteraction API_AVAILABLE(ios(13.0)) {
+  if (!_textInteraction) {
+    _textInteraction =
+        [[UITextInteraction textInteractionForMode:UITextInteractionModeEditable] retain];
+    _textInteraction.textInput = self;
+  }
+  return _textInteraction;
+}
+
 - (void)setTextInputState:(NSDictionary*)state {
+  if (@available(iOS 13.0, *)) {
+    // [UITextInteraction willMoveToView:] sometimes sets the textInput's inputDelegate
+    // to nil. This is likely a bug in UIKit. In order to inform the keyboard of text
+    // and selection changes when that happens, add a dummy UITextInteraction to this
+    // view so it sets a valid inputDelegate that we can call textWillChange et al. on.
+    // See https://github.com/flutter/engine/pull/32881.
+    if (!self.inputDelegate && self.isFirstResponder) {
+      [self addInteraction:self.textInteraction];
+    }
+  }
+
   NSString* newText = state[@"text"];
   BOOL textChanged = ![self.text isEqualToString:newText];
   if (textChanged) {
@@ -932,15 +953,21 @@ static BOOL IsScribbleAvailable() {
 
     [self setSelectedTextRangeLocal:[FlutterTextRange rangeWithNSRange:selectedRange]];
 
-    _selectionAffinity = _kTextAffinityDownstream;
-    if ([state[@"selectionAffinity"] isEqualToString:@(_kTextAffinityUpstream)]) {
-      _selectionAffinity = _kTextAffinityUpstream;
+    _selectionAffinity = kTextAffinityDownstream;
+    if ([state[@"selectionAffinity"] isEqualToString:@(kTextAffinityUpstream)]) {
+      _selectionAffinity = kTextAffinityUpstream;
     }
     [self.inputDelegate selectionDidChange:self];
   }
 
   if (textChanged) {
     [self.inputDelegate textDidChange:self];
+  }
+
+  if (@available(iOS 13.0, *)) {
+    if (_textInteraction) {
+      [self removeInteraction:_textInteraction];
+    }
   }
 }
 
@@ -1006,16 +1033,27 @@ static BOOL IsScribbleAvailable() {
 
 #pragma mark UIScribbleInteractionDelegate
 
+// Checks whether Scribble features are possibly available – meaning this is an iPad running iOS
+// 14 or higher.
+- (BOOL)isScribbleAvailable {
+  if (@available(iOS 14.0, *)) {
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+      return YES;
+    }
+  }
+  return NO;
+}
+
 - (void)scribbleInteractionWillBeginWriting:(UIScribbleInteraction*)interaction
     API_AVAILABLE(ios(14.0)) {
   _scribbleInteractionStatus = FlutterScribbleInteractionStatusStarted;
-  [_textInputDelegate flutterTextInputViewScribbleInteractionBegan:self];
+  [self.textInputDelegate flutterTextInputViewScribbleInteractionBegan:self];
 }
 
 - (void)scribbleInteractionDidFinishWriting:(UIScribbleInteraction*)interaction
     API_AVAILABLE(ios(14.0)) {
   _scribbleInteractionStatus = FlutterScribbleInteractionStatusEnding;
-  [_textInputDelegate flutterTextInputViewScribbleInteractionFinished:self];
+  [self.textInputDelegate flutterTextInputViewScribbleInteractionFinished:self];
 }
 
 - (BOOL)scribbleInteraction:(UIScribbleInteraction*)interaction
@@ -1038,10 +1076,18 @@ static BOOL IsScribbleAvailable() {
   return _textInputClient != 0;
 }
 
+- (BOOL)resignFirstResponder {
+  BOOL success = [super resignFirstResponder];
+  if (success) {
+    [self.textInputDelegate flutterTextInputViewDidResignFirstResponder:self];
+  }
+  return success;
+}
+
 - (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
   // When scribble is available, the FlutterTextInputView will display the native toolbar unless
   // these text editing actions are disabled.
-  if (IsScribbleAvailable()) {
+  if ([self isScribbleAvailable] && sender == NULL) {
     return NO;
   }
   if (action == @selector(paste:)) {
@@ -1108,6 +1154,10 @@ static BOOL IsScribbleAvailable() {
 }
 
 - (void)setSelectedTextRange:(UITextRange*)selectedTextRange {
+  if (!_enableInteractiveSelection) {
+    return;
+  }
+
   [self setSelectedTextRangeLocal:selectedTextRange];
 
   if (_enableDeltaModel) {
@@ -1122,7 +1172,7 @@ static BOOL IsScribbleAvailable() {
              @"Expected a FlutterTextRange for range (got %@).", [selectedTextRange class]);
     FlutterTextRange* flutterTextRange = (FlutterTextRange*)selectedTextRange;
     if (flutterTextRange.range.length > 0) {
-      [_textInputDelegate flutterTextInputView:self showToolbar:_textInputClient];
+      [self.textInputDelegate flutterTextInputView:self showToolbar:_textInputClient];
     }
   }
 
@@ -1313,7 +1363,7 @@ static BOOL IsScribbleAvailable() {
   if (toIndex >= fromIndex) {
     return [FlutterTextRange rangeWithNSRange:NSMakeRange(fromIndex, toIndex - fromIndex)];
   } else {
-    // toIndex may be less than fromIndex, because
+    // toIndex can be smaller than fromIndex, because
     // UITextInputStringTokenizer does not handle CJK characters
     // well in some cases. See:
     // https://github.com/flutter/flutter/issues/58750#issuecomment-644469521
@@ -1516,10 +1566,10 @@ static BOOL IsScribbleAvailable() {
 
   if (_scribbleInteractionStatus == FlutterScribbleInteractionStatusNone &&
       _scribbleFocusStatus == FlutterScribbleFocusStatusUnfocused) {
-    [_textInputDelegate flutterTextInputView:self
-        showAutocorrectionPromptRectForStart:start
-                                         end:end
-                                  withClient:_textInputClient];
+    [self.textInputDelegate flutterTextInputView:self
+            showAutocorrectionPromptRectForStart:start
+                                             end:end
+                                      withClient:_textInputClient];
   }
 
   NSUInteger first = start;
@@ -1646,7 +1696,6 @@ static BOOL IsScribbleAvailable() {
     if (position <= end) {
       if (IsSelectionRectCloserToPoint(point, _selectionRects[i].rect, _closestRect,
                                        /*checkRightBoundary=*/YES)) {
-        _closestIndex = [_selectionRects count];
         _closestPosition = position;
       }
     }
@@ -1685,14 +1734,6 @@ static BOOL IsScribbleAvailable() {
   // call always turns a CGRect's negative dimensions into non-negative values, e.g.,
   // (1, 2, -3, -4) would become (-2, -2, 3, 4).
   _isFloatingCursorActive = true;
-  // This makes sure UITextSelectionView.interactionAssistant is not nil so
-  // UITextSelectionView has access to this view (and its bounds). Otherwise
-  // floating cursor breaks: https://github.com/flutter/flutter/issues/70267.
-  if (@available(iOS 13.0, *)) {
-    self.textInteraction = [UITextInteraction textInteractionForMode:UITextInteractionModeEditable];
-    self.textInteraction.textInput = self;
-    [self addInteraction:_textInteraction];
-  }
   [self.textInputDelegate flutterTextInputView:self
                           updateFloatingCursor:FlutterFloatingCursorDragStateStart
                                     withClient:_textInputClient
@@ -1709,12 +1750,6 @@ static BOOL IsScribbleAvailable() {
 
 - (void)endFloatingCursor {
   _isFloatingCursorActive = false;
-  if (@available(iOS 13.0, *)) {
-    if (_textInteraction != NULL) {
-      [self removeInteraction:_textInteraction];
-      self.textInteraction = NULL;
-    }
-  }
   [self.textInputDelegate flutterTextInputView:self
                           updateFloatingCursor:FlutterFloatingCursorDragStateEnd
                                     withClient:_textInputClient
@@ -1734,7 +1769,6 @@ static BOOL IsScribbleAvailable() {
     composingBase = ((FlutterTextPosition*)self.markedTextRange.start).index;
     composingExtent = ((FlutterTextPosition*)self.markedTextRange.end).index;
   }
-
   NSDictionary* state = @{
     @"selectionBase" : @(selectionBase),
     @"selectionExtent" : @(selectionExtent),
@@ -1823,25 +1857,25 @@ static BOOL IsScribbleAvailable() {
   [self resetScribbleInteractionStatusIfEnding];
   self.selectionRects = copiedRects;
   [copiedRects release];
-  _selectionAffinity = _kTextAffinityDownstream;
+  _selectionAffinity = kTextAffinityDownstream;
   [self replaceRange:_selectedTextRange withText:text];
 }
 
 - (UITextPlaceholder*)insertTextPlaceholderWithSize:(CGSize)size API_AVAILABLE(ios(13.0)) {
-  [_textInputDelegate flutterTextInputView:self
-             insertTextPlaceholderWithSize:size
-                                withClient:_textInputClient];
+  [self.textInputDelegate flutterTextInputView:self
+                 insertTextPlaceholderWithSize:size
+                                    withClient:_textInputClient];
   _hasPlaceholder = YES;
   return [[[FlutterTextPlaceholder alloc] init] autorelease];
 }
 
 - (void)removeTextPlaceholder:(UITextPlaceholder*)textPlaceholder API_AVAILABLE(ios(13.0)) {
   _hasPlaceholder = NO;
-  [_textInputDelegate flutterTextInputView:self removeTextPlaceholder:_textInputClient];
+  [self.textInputDelegate flutterTextInputView:self removeTextPlaceholder:_textInputClient];
 }
 
 - (void)deleteBackward {
-  _selectionAffinity = _kTextAffinityDownstream;
+  _selectionAffinity = kTextAffinityDownstream;
   _scribbleFocusStatus = FlutterScribbleFocusStatusUnfocused;
   [self resetScribbleInteractionStatusIfEnding];
 
@@ -1895,6 +1929,27 @@ static BOOL IsScribbleAvailable() {
   if (_scribbleInteractionStatus == FlutterScribbleInteractionStatusEnding) {
     _scribbleInteractionStatus = FlutterScribbleInteractionStatusNone;
   }
+}
+
+#pragma mark - Key Events Handling
+- (void)pressesBegan:(NSSet<UIPress*>*)presses
+           withEvent:(UIPressesEvent*)event API_AVAILABLE(ios(9.0)) {
+  [_textInputPlugin.get().viewController pressesBegan:presses withEvent:event];
+}
+
+- (void)pressesChanged:(NSSet<UIPress*>*)presses
+             withEvent:(UIPressesEvent*)event API_AVAILABLE(ios(9.0)) {
+  [_textInputPlugin.get().viewController pressesChanged:presses withEvent:event];
+}
+
+- (void)pressesEnded:(NSSet<UIPress*>*)presses
+           withEvent:(UIPressesEvent*)event API_AVAILABLE(ios(9.0)) {
+  [_textInputPlugin.get().viewController pressesEnded:presses withEvent:event];
+}
+
+- (void)pressesCancelled:(NSSet<UIPress*>*)presses
+               withEvent:(UIPressesEvent*)event API_AVAILABLE(ios(9.0)) {
+  [_textInputPlugin.get().viewController pressesCancelled:presses withEvent:event];
 }
 
 @end
@@ -1964,36 +2019,30 @@ static BOOL IsScribbleAvailable() {
 
 @implementation FlutterTextInputPlugin {
   NSTimer* _enableFlutterTextInputViewAccessibilityTimer;
+  std::unique_ptr<fml::WeakPtrFactory<FlutterTextInputPlugin>> _weakFactory;
+  id<FlutterTextInputDelegate> _textInputDelegate;
 }
 
-@synthesize textInputDelegate = _textInputDelegate;
-
-- (instancetype)init {
+- (instancetype)initWithDelegate:(id<FlutterTextInputDelegate>)textInputDelegate {
   self = [super init];
 
   if (self) {
+    // `_textInputDelegate` is a weak reference because it should retain FlutterTextInputPlugin.
+    _textInputDelegate = textInputDelegate;
+    _weakFactory = std::make_unique<fml::WeakPtrFactory<FlutterTextInputPlugin>>(self);
     _autofillContext = [[NSMutableDictionary alloc] init];
     _inputHider = [[FlutterTextInputViewAccessibilityHider alloc] init];
     _scribbleElements = [[NSMutableDictionary alloc] init];
-    // Initialize activeView with a dummy view to keep tests
-    // passing. This dummy view needs to be replace once the
-    // framework initializes an input connection, and thus
-    // should never have access to the textInputDelegate.
-    _activeView = [[FlutterTextInputView alloc] init];
-    [_activeView decommission];
   }
 
   return self;
 }
 
 - (void)dealloc {
+  _weakFactory.reset();
   [self hideTextInput];
-  _activeView.textInputDelegate = nil;
   [_activeView release];
   [_inputHider release];
-  for (FlutterTextInputView* autofillView in _autofillContext.allValues) {
-    autofillView.textInputDelegate = nil;
-  }
   [_autofillContext release];
   [_scribbleElements release];
   [super dealloc];
@@ -2011,6 +2060,14 @@ static BOOL IsScribbleAvailable() {
   return _activeView;
 }
 
+- (id<FlutterTextInputDelegate>)textInputDelegate {
+  return _textInputDelegate;
+}
+
+- (fml::WeakPtr<FlutterTextInputPlugin>)weakPtr {
+  return _weakFactory->GetWeakPtr();
+}
+
 - (void)handleMethodCall:(FlutterMethodCall*)call result:(FlutterResult)result {
   NSString* method = call.method;
   id args = call.arguments;
@@ -2022,6 +2079,10 @@ static BOOL IsScribbleAvailable() {
     result(nil);
   } else if ([method isEqualToString:kSetClientMethod]) {
     [self setTextInputClient:[args[0] intValue] withConfiguration:args[1]];
+    result(nil);
+  } else if ([method isEqualToString:kSetPlatformViewClientMethod]) {
+    // This method call has a `platformViewId` argument, but we do not need it for iOS for now.
+    [self setPlatformViewTextInputClient];
     result(nil);
   } else if ([method isEqualToString:kSetEditingStateMethod]) {
     [self setTextInputEditingState:args];
@@ -2038,7 +2099,7 @@ static BOOL IsScribbleAvailable() {
   } else if ([method isEqualToString:kFinishAutofillContextMethod]) {
     [self triggerAutofillSave:[args boolValue]];
     result(nil);
-  } else if ([method isEqualToString:@"TextInput.setSelectionRects"]) {
+  } else if ([method isEqualToString:kSetSelectionRectsMethod]) {
     [self setSelectionRects:args];
     result(nil);
   } else {
@@ -2048,7 +2109,7 @@ static BOOL IsScribbleAvailable() {
 
 - (void)setEditableSizeAndTransform:(NSDictionary*)dictionary {
   [_activeView setEditableTransform:dictionary[@"transform"]];
-  if (IsScribbleAvailable()) {
+  if ([_activeView isScribbleAvailable]) {
     // This is necessary to set up where the scribble interactable element will be.
     int leftIndex = 12;
     int topIndex = 13;
@@ -2086,7 +2147,6 @@ static BOOL IsScribbleAvailable() {
 }
 
 - (void)showTextInput {
-  _activeView.textInputDelegate = _textInputDelegate;
   _activeView.viewResponder = _viewResponder;
   [self addToInputParentViewIfNeeded:_activeView];
   // Adds a delay to prevent the text view from receiving accessibility
@@ -2140,6 +2200,16 @@ static BOOL IsScribbleAvailable() {
   [self addToInputParentViewIfNeeded:_activeView];
 }
 
+- (void)setPlatformViewTextInputClient {
+  // No need to track the platformViewID (unlike in Android). When a platform view
+  // becomes the first responder, simply hide this dummy text input view (`_activeView`)
+  // for the previously focused widget.
+  [self removeEnableFlutterTextInputViewAccessibilityTimer];
+  _activeView.accessibilityEnabled = NO;
+  [_activeView removeFromSuperview];
+  [_inputHider removeFromSuperview];
+}
+
 - (void)setTextInputClient:(int)client withConfiguration:(NSDictionary*)configuration {
   [self resetAllClientIds];
   // Hide all input views from autofill, only make those in the new configuration visible
@@ -2190,10 +2260,9 @@ static BOOL IsScribbleAvailable() {
   if (autofillId) {
     [_autofillContext removeObjectForKey:autofillId];
   }
-  FlutterTextInputView* newView = [[FlutterTextInputView alloc] init];
+  FlutterTextInputView* newView = [[FlutterTextInputView alloc] initWithOwner:self];
   [newView configureWithDictionary:configuration];
   [self addToInputParentViewIfNeeded:newView];
-  newView.textInputDelegate = _textInputDelegate;
 
   for (NSDictionary* field in configuration[kAssociatedAutofillFields]) {
     NSString* autofillId = AutofillIdFromDictionary(field);
@@ -2256,21 +2325,22 @@ static BOOL IsScribbleAvailable() {
   if (!inputView) {
     inputView =
         needsPasswordAutofill ? [FlutterSecureTextInputView alloc] : [FlutterTextInputView alloc];
-    inputView = [[inputView init] autorelease];
+    inputView = [[inputView initWithOwner:self] autorelease];
     [self addToInputParentViewIfNeeded:inputView];
   }
 
-  inputView.textInputDelegate = _textInputDelegate;
   [inputView configureWithDictionary:field];
   return inputView;
 }
 
 // The UIView to add FlutterTextInputViews to.
 - (UIView*)hostView {
-  NSAssert(self.viewController.view != nullptr,
-           @"The application must have a HostView since the keyboard client "
-           @"must be part of the responder chain to function");
-  return self.viewController.view;
+  UIView* host = _viewController.view;
+  NSAssert(host != nullptr,
+           @"The application must have a host view since the keyboard client "
+           @"must be part of the responder chain to function. The host view controller is %@",
+           _viewController);
+  return host;
 }
 
 // The UIView to add FlutterTextInputViews to.

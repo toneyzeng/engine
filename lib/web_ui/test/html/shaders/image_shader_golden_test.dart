@@ -10,7 +10,6 @@ import 'package:test/test.dart';
 import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart' hide TextStyle;
 
-import '../../common.dart';
 import '../screenshot.dart';
 
 // TODO(yjbanov): unskip Firefox tests when Firefox implements WebGL in headless mode.
@@ -26,11 +25,11 @@ Future<void> testMain() async {
   const Rect screenRect = Rect.fromLTWH(0, 0, screenWidth, screenHeight);
   final HtmlImage testImage = createTestImage();
 
-  setUp(() async {
+  setUpAll(() async {
     debugEmulateFlutterTesterEnvironment = true;
     await webOnlyInitializePlatform();
-    webOnlyFontCollection.debugRegisterTestFonts();
-    await webOnlyFontCollection.ensureFontsLoaded();
+    fontCollection.debugRegisterTestFonts();
+    await fontCollection.ensureFontsLoaded();
   });
 
   void _drawShapes(RecordingCanvas rc, SurfacePaint paint, Rect shaderRect) {
@@ -145,7 +144,6 @@ HtmlImage createTestImage() {
   ctx.fillRect(width2, width2, width2, width2);
   ctx.fill();
   final html.ImageElement imageElement = html.ImageElement();
-  // ignore: implicit_dynamic_function
-  imageElement.src = js_util.callMethod(canvas, 'toDataURL', <dynamic>[]) as String;
+  imageElement.src = js_util.callMethod<String>(canvas, 'toDataURL', <dynamic>[]);
   return HtmlImage(imageElement, width, height);
 }
