@@ -2,14 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:html' as html;
-
 import 'package:ui/ui.dart' as ui;
 
 import '../engine.dart'  show registerHotRestartListener;
 import 'browser_detection.dart';
 import 'dom.dart';
-import 'key_map.dart';
+import 'key_map.g.dart';
 import 'platform_dispatcher.dart';
 import 'safe_browser_api.dart';
 import 'semantics.dart';
@@ -90,13 +88,17 @@ Duration _eventTimeStampToDuration(num milliseconds) {
 }
 
 class KeyboardBinding {
+  KeyboardBinding._() {
+    _setup();
+  }
+
   /// The singleton instance of this object.
   static KeyboardBinding? get instance => _instance;
   static KeyboardBinding? _instance;
 
-  static void initInstance(DomElement glassPaneElement) {
+  static void initInstance() {
     if (_instance == null) {
-      _instance = KeyboardBinding._(glassPaneElement);
+      _instance = KeyboardBinding._();
       assert(() {
         registerHotRestartListener(_instance!._reset);
         return true;
@@ -104,12 +106,7 @@ class KeyboardBinding {
     }
   }
 
-  KeyboardBinding._(this.glassPaneElement) {
-    _setup();
-  }
-
-  final DomElement glassPaneElement;
-  late KeyboardConverter _converter;
+  late final KeyboardConverter _converter;
   final Map<String, DomEventListener> _listeners = <String, DomEventListener>{};
 
   void _addEventListener(String eventName, DomEventListener handler) {
@@ -117,7 +114,7 @@ class KeyboardBinding {
       if (_debugLogKeyEvents) {
         print(event.type);
       }
-      if (EngineSemanticsOwner.instance.receiveGlobalEvent(event as html.Event)) {
+      if (EngineSemanticsOwner.instance.receiveGlobalEvent(event)) {
         return handler(event);
       }
       return null;
@@ -181,6 +178,7 @@ class FlutterHtmlKeyboardEvent {
   String get type => _event.type;
   String? get code => _event.code;
   String? get key => _event.key;
+  int get keyCode => _event.keyCode;
   bool? get repeat => _event.repeat;
   int? get location => _event.location;
   num? get timeStamp => _event.timeStamp;
@@ -191,6 +189,7 @@ class FlutterHtmlKeyboardEvent {
 
   bool getModifierState(String key) => _event.getModifierState(key);
   void preventDefault() => _event.preventDefault();
+  bool get defaultPrevented => _event.defaultPrevented;
 }
 
 // Reads [DomKeyboardEvent], then [dispatches ui.KeyData] accordingly.
@@ -326,8 +325,9 @@ class KeyboardConverter {
   final Map<int, _VoidCallback> _keyGuards = <int, _VoidCallback>{};
   // Call this method on the down or repeated event of a non-modifier key.
   void _startGuardingKey(int physicalKey, int logicalKey, Duration currentTimeStamp) {
-    if (!_shouldDoKeyGuard())
+    if (!_shouldDoKeyGuard()) {
       return;
+    }
     final _VoidCallback cancelingCallback = _scheduleAsyncEvent(
       _kKeydownCancelDurationMac,
       () => ui.KeyData(
@@ -359,15 +359,17 @@ class KeyboardConverter {
     final bool logicalKeyIsCharacter = !_eventKeyIsKeyname(eventKey);
     final String? character = logicalKeyIsCharacter ? eventKey : null;
     final int logicalKey = () {
-      if (kWebLogicalLocationMap.containsKey(event.key!)) {
+      if (kWebLogicalLocationMap.containsKey(event.key)) {
         final int? result = kWebLogicalLocationMap[event.key!]?[event.location!];
         assert(result != null, 'Invalid modifier location: ${event.key}, ${event.location}');
         return result!;
       }
-      if (character != null)
+      if (character != null) {
         return _characterToLogicalKey(character);
-      if (eventKey == _kLogicalDead)
+      }
+      if (eventKey == _kLogicalDead) {
         return _deadKeyToLogicalKey(physicalKey, event);
+      }
       return _otherLogicalKey(eventKey);
     }();
 
@@ -489,8 +491,9 @@ class KeyboardConverter {
       }
       if (_pressingRecords.containsValue(testeeLogicalKey) && !getModifier(event)) {
         _pressingRecords.removeWhere((int physicalKey, int logicalRecord) {
-          if (logicalRecord != testeeLogicalKey)
+          if (logicalRecord != testeeLogicalKey) {
             return false;
+          }
 
           _dispatchKeyData!(ui.KeyData(
             timeStamp: timeStamp,

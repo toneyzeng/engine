@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:html' as html;
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:web_gl';
@@ -12,9 +11,7 @@ import 'package:test/test.dart';
 import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart';
 
-import 'package:web_engine_tester/golden_tester.dart';
-
-import '../paragraph/text_scuba.dart';
+import '../screenshot.dart';
 
 // TODO(yjbanov): unskip Firefox tests when Firefox implements WebGL in headless mode.
 // https://github.com/flutter/flutter/issues/86623
@@ -27,36 +24,7 @@ Future<void> testMain() async {
   const double screenWidth = 600.0;
   const double screenHeight = 800.0;
   const Rect screenRect = Rect.fromLTWH(0, 0, screenWidth, screenHeight);
-
-  // Commit a recording canvas to a bitmap, and compare with the expected
-  Future<void> _checkScreenshot(RecordingCanvas rc, String fileName,
-      {Rect region = const Rect.fromLTWH(0, 0, 500, 240),
-        double maxDiffRatePercent = 0.0, bool write = false}) async {
-    final EngineCanvas engineCanvas = BitmapCanvas(screenRect,
-        RenderStrategy());
-
-    rc.endRecording();
-    rc.apply(engineCanvas, screenRect);
-
-    // Wrap in <flt-scene> so that our CSS selectors kick in.
-    final DomElement sceneElement = createDomElement('flt-scene');
-    if (isIosSafari) {
-      // Shrink to fit on the iPhone screen.
-      sceneElement.style.position = 'absolute';
-      sceneElement.style.transformOrigin = '0 0 0';
-      sceneElement.style.transform = 'scale(0.3)';
-    }
-    try {
-      sceneElement.append(engineCanvas.rootElement);
-      domDocument.body!.append(sceneElement);
-      await matchGoldenFile('$fileName.png',
-          region: region, maxDiffRatePercent: maxDiffRatePercent, write: write);
-    } finally {
-      // The page is reused across tests, so remove the element after taking the
-      // Scuba screenshot.
-      sceneElement.remove();
-    }
-  }
+  const Rect region = Rect.fromLTWH(0, 0, 500, 240);
 
   setUp(() async {
     debugEmulateFlutterTesterEnvironment = true;
@@ -140,7 +108,7 @@ Future<void> testMain() async {
     canvas.drawRect(rectBounds, borderPaint);
 
     canvas.restore();
-    await _checkScreenshot(canvas, 'sweep_gradient_rect');
+    await canvasScreenshot(canvas, 'sweep_gradient_rect', canvasRect: screenRect, region: region);
   }, skip: isFirefox);
 
   test('Paints sweep gradient ovals', () async {
@@ -219,7 +187,7 @@ Future<void> testMain() async {
     canvas.drawRect(rectBounds, borderPaint);
 
     canvas.restore();
-    await _checkScreenshot(canvas, 'sweep_gradient_oval');
+    await canvasScreenshot(canvas, 'sweep_gradient_oval', canvasRect: screenRect, region: region);
   }, skip: isFirefox);
 
   test('Paints sweep gradient paths', () async {
@@ -303,7 +271,7 @@ Future<void> testMain() async {
     canvas.drawRect(rectBounds, borderPaint);
 
     canvas.restore();
-    await _checkScreenshot(canvas, 'sweep_gradient_path');
+    await canvasScreenshot(canvas, 'sweep_gradient_path', canvasRect: screenRect, region: region);
   }, skip: isFirefox);
 
   /// Regression test for https://github.com/flutter/flutter/issues/74137.
@@ -351,7 +319,7 @@ Future<void> testMain() async {
     canvas.drawRect(rectBounds, borderPaint);
 
     canvas.restore();
-    await _checkScreenshot(canvas, 'linear_gradient_rect_shifted');
+    await canvasScreenshot(canvas, 'linear_gradient_rect_shifted', canvasRect: screenRect, region: region);
   }, skip: isFirefox);
 
   /// Regression test for https://github.com/flutter/flutter/issues/82748.
@@ -390,10 +358,10 @@ Future<void> testMain() async {
     canvas.apply(engineCanvas, screenRect);
   });
 
-  test('Creating lots of gradients doesn\'t create too many webgl contexts',
+  test("Creating lots of gradients doesn't create too many webgl contexts",
       () async {
-    final html.CanvasElement sideCanvas =
-        html.CanvasElement(width: 5, height: 5);
+    final DomCanvasElement sideCanvas =
+        createDomCanvasElement(width: 5, height: 5);
     final RenderingContext? context =
         sideCanvas.getContext('webgl') as RenderingContext?;
     expect(context, isNotNull);
@@ -408,7 +376,7 @@ Future<void> testMain() async {
         ];
 
         final GradientLinear linearGradient = GradientLinear(
-            const Offset(0, 0),
+            Offset.zero,
             const Offset(10, 10),
             colors,
             null,
@@ -466,7 +434,7 @@ Future<void> testMain() async {
     canvas.drawRect(rectBounds, borderPaint);
 
     canvas.restore();
-    await _checkScreenshot(canvas, 'linear_gradient_rect_clamp_rotated');
+    await canvasScreenshot(canvas, 'linear_gradient_rect_clamp_rotated', canvasRect: screenRect, region: region);
   });
 
   test('Paints linear gradient properly when within svg context', () async {
@@ -500,7 +468,7 @@ Future<void> testMain() async {
     canvas.drawRect(rectBounds, borderPaint);
 
     canvas.restore();
-    await _checkScreenshot(canvas, 'linear_gradient_in_svg_context');
+    await canvasScreenshot(canvas, 'linear_gradient_in_svg_context', canvasRect: screenRect, region: region);
   });
 }
 

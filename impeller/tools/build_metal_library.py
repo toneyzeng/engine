@@ -93,11 +93,6 @@ def main():
     command += [
         '--std=macos-metal1.2',
     ]
-  elif args.platform == 'ios':
-    command += [
-        '--std=ios-metal1.2',
-        '-mios-version-min=10.0',
-    ]
 
   if args.optimize:
     command += [
@@ -105,7 +100,19 @@ def main():
         '-Oz',
         # Allow aggressive, lossy floating-point optimizations.
         '-ffast-math',
+        # limiting to ios-metal1.2 disables shader debug symbols, only
+        # enabling these in optimize mode.
+        # see https://github.com/flutter/flutter/issues/106066
+        '--std=ios-metal1.2',
     ]
+    if args.platform == 'ios':
+      command += [
+          '-mios-version-min=10.0',
+      ]
+    elif args.platform == 'ios-simulator':
+      command += [
+          '-miphonesimulator-version-min=11.0',
+      ]
   else:
     command += [
         # Embeds both sources and driver options in the output. This aids in

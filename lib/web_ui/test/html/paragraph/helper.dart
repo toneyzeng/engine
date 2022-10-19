@@ -6,6 +6,22 @@ import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart';
 import 'package:web_engine_tester/golden_tester.dart';
 
+const LineBreakType prohibited = LineBreakType.prohibited;
+const LineBreakType opportunity = LineBreakType.opportunity;
+const LineBreakType mandatory = LineBreakType.mandatory;
+const LineBreakType endOfText = LineBreakType.endOfText;
+
+const TextDirection ltr = TextDirection.ltr;
+const TextDirection rtl = TextDirection.rtl;
+
+const FragmentFlow ffLtr = FragmentFlow.ltr;
+const FragmentFlow ffRtl = FragmentFlow.rtl;
+const FragmentFlow ffPrevious = FragmentFlow.previous;
+const FragmentFlow ffSandwich = FragmentFlow.sandwich;
+
+const String rtlWord1 = 'واحدة';
+const String rtlWord2 = 'ثنتان';
+
 const Color white = Color(0xFFFFFFFF);
 const Color black = Color(0xFF000000);
 const Color red = Color(0xFFFF0000);
@@ -45,10 +61,8 @@ CanvasParagraph rich(
 Future<void> takeScreenshot(
   EngineCanvas canvas,
   Rect region,
-  String fileName, {
-  bool write = false,
-  double? maxDiffRatePercent,
-}) async {
+  String fileName,
+) async {
   final DomElement sceneElement = createDomElement('flt-scene');
   if (isIosSafari) {
     // Shrink to fit on the iPhone screen.
@@ -62,8 +76,6 @@ Future<void> takeScreenshot(
     await matchGoldenFile(
       '$fileName.png',
       region: region,
-      maxDiffRatePercent: maxDiffRatePercent,
-      write: write,
     );
   } finally {
     // The page is reused across tests, so remove the element after taking the

@@ -28,11 +28,13 @@ environment:
 dependencies:
   analyzer: any
   _fe_analyzer_shared: any
+  pub_semver: any
 
 dev_dependencies:
   async_helper: any
   expect: any
   litetest: any
+  path: any
   smith: any
 
 dependency_overrides:
@@ -61,7 +63,7 @@ dependency_overrides:
   meta:
     path: ../../../third_party/dart/pkg/meta
   package_config:
-    path: ../../../third_party/dart/third_party/pkg_tested/package_config
+    path: ../../../third_party/dart/third_party/pkg/package_config
   path:
     path: ../../../third_party/dart/third_party/pkg/path
   pub_semver:

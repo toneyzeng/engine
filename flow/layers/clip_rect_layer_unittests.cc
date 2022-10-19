@@ -4,6 +4,7 @@
 
 #include "flutter/flow/layers/clip_rect_layer.h"
 
+#include "flutter/flow/layers/layer_tree.h"
 #include "flutter/flow/layers/opacity_layer.h"
 #include "flutter/flow/testing/layer_test.h"
 #include "flutter/flow/testing/mock_layer.h"
@@ -204,7 +205,7 @@ TEST_F(ClipRectLayerTest, PartiallyContainedChild) {
 
 static bool ReadbackResult(PrerollContext* context,
                            Clip clip_behavior,
-                           std::shared_ptr<Layer> child,
+                           const std::shared_ptr<Layer>& child,
                            bool before) {
   const SkMatrix initial_matrix = SkMatrix();
   const SkRect layer_bounds = SkRect::MakeXYWH(0.5, 1.0, 5.0, 6.0);
@@ -227,7 +228,8 @@ TEST_F(ClipRectLayerTest, Readback) {
   const Clip save_layer = Clip::antiAliasWithSaveLayer;
 
   std::shared_ptr<MockLayer> nochild;
-  auto reader = std::make_shared<MockLayer>(path, paint, false, true);
+  auto reader = std::make_shared<MockLayer>(path, paint);
+  reader->set_fake_reads_surface(true);
   auto nonreader = std::make_shared<MockLayer>(path, paint);
 
   // No children, no prior readback -> no readback after
@@ -297,20 +299,20 @@ TEST_F(ClipRectLayerTest, OpacityInheritance) {
 
   {
     // ClipRectLayer(aa with saveLayer) will always be compatible
-    auto clip_rect_saveLayer = std::make_shared<ClipRectLayer>(
+    auto clip_path_savelayer = std::make_shared<ClipRectLayer>(
         clip_rect, Clip::antiAliasWithSaveLayer);
-    clip_rect_saveLayer->Add(mock1);
-    clip_rect_saveLayer->Add(mock2);
+    clip_path_savelayer->Add(mock1);
+    clip_path_savelayer->Add(mock2);
 
     // Double check first two children are compatible and non-overlapping
     context->subtree_can_inherit_opacity = false;
-    clip_rect_saveLayer->Preroll(context, SkMatrix::I());
+    clip_path_savelayer->Preroll(context, SkMatrix::I());
     EXPECT_TRUE(context->subtree_can_inherit_opacity);
 
     // Now add the overlapping child and test again, should still be compatible
-    clip_rect_saveLayer->Add(mock3);
+    clip_path_savelayer->Add(mock3);
     context->subtree_can_inherit_opacity = false;
-    clip_rect_saveLayer->Preroll(context, SkMatrix::I());
+    clip_path_savelayer->Preroll(context, SkMatrix::I());
     EXPECT_TRUE(context->subtree_can_inherit_opacity);
   }
 
@@ -341,20 +343,20 @@ TEST_F(ClipRectLayerTest, OpacityInheritance) {
 
   {
     // ClipRectLayer(aa with saveLayer) will always be compatible
-    auto clip_rect_saveLayer_bad_child = std::make_shared<ClipRectLayer>(
+    auto clip_path_savelayer_bad_child = std::make_shared<ClipRectLayer>(
         clip_rect, Clip::antiAliasWithSaveLayer);
-    clip_rect_saveLayer_bad_child->Add(mock1);
-    clip_rect_saveLayer_bad_child->Add(mock2);
+    clip_path_savelayer_bad_child->Add(mock1);
+    clip_path_savelayer_bad_child->Add(mock2);
 
     // Double check first two children are compatible and non-overlapping
     context->subtree_can_inherit_opacity = false;
-    clip_rect_saveLayer_bad_child->Preroll(context, SkMatrix::I());
+    clip_path_savelayer_bad_child->Preroll(context, SkMatrix::I());
     EXPECT_TRUE(context->subtree_can_inherit_opacity);
 
     // Now add the incompatible child and test again, should still be compatible
-    clip_rect_saveLayer_bad_child->Add(mock4);
+    clip_path_savelayer_bad_child->Add(mock4);
     context->subtree_can_inherit_opacity = false;
-    clip_rect_saveLayer_bad_child->Preroll(context, SkMatrix::I());
+    clip_path_savelayer_bad_child->Preroll(context, SkMatrix::I());
     EXPECT_TRUE(context->subtree_can_inherit_opacity);
   }
 }
@@ -384,18 +386,12 @@ TEST_F(ClipRectLayerTest, OpacityInheritancePainting) {
   context->subtree_can_inherit_opacity = false;
   opacity_layer->Preroll(context, SkMatrix::I());
   EXPECT_TRUE(opacity_layer->children_can_accept_opacity());
-#ifndef SUPPORT_FRACTIONAL_TRANSLATION
-  auto opacity_integer_transform = SkM44::Translate(offset.fX, offset.fY);
-#endif
+
   DisplayListBuilder expected_builder;
   /* OpacityLayer::Paint() */ {
     expected_builder.save();
     {
       expected_builder.translate(offset.fX, offset.fY);
-#ifndef SUPPORT_FRACTIONAL_TRANSLATION
-      expected_builder.transformReset();
-      expected_builder.transform(opacity_integer_transform);
-#endif
       /* ClipRectLayer::Paint() */ {
         expected_builder.save();
         expected_builder.clipRect(clip_rect, SkClipOp::kIntersect, true);
@@ -454,18 +450,12 @@ TEST_F(ClipRectLayerTest, OpacityInheritanceSaveLayerPainting) {
   context->subtree_can_inherit_opacity = false;
   opacity_layer->Preroll(context, SkMatrix::I());
   EXPECT_TRUE(opacity_layer->children_can_accept_opacity());
-#ifndef SUPPORT_FRACTIONAL_TRANSLATION
-  auto opacity_integer_transform = SkM44::Translate(offset.fX, offset.fY);
-#endif
+
   DisplayListBuilder expected_builder;
   /* OpacityLayer::Paint() */ {
     expected_builder.save();
     {
       expected_builder.translate(offset.fX, offset.fY);
-#ifndef SUPPORT_FRACTIONAL_TRANSLATION
-      expected_builder.transformReset();
-      expected_builder.transform(opacity_integer_transform);
-#endif
       /* ClipRectLayer::Paint() */ {
         expected_builder.save();
         expected_builder.clipRect(clip_rect, SkClipOp::kIntersect, true);
@@ -503,24 +493,27 @@ TEST_F(ClipRectLayerTest, LayerCached) {
 
   use_mock_raster_cache();
 
-  EXPECT_EQ(raster_cache()->GetLayerCachedEntriesCount(), (size_t)0);
-  EXPECT_FALSE(raster_cache()->Draw(layer.get(), cache_canvas,
-                                    RasterCacheLayerStrategy::kLayer));
+  const auto* clip_cache_item = layer->raster_cache_item();
 
   layer->Preroll(preroll_context(), initial_transform);
+  LayerTree::TryToRasterCache(cacheable_items(), &paint_context());
+
   EXPECT_EQ(raster_cache()->GetLayerCachedEntriesCount(), (size_t)0);
-  EXPECT_FALSE(raster_cache()->Draw(layer.get(), cache_canvas,
-                                    RasterCacheLayerStrategy::kLayer));
+  EXPECT_EQ(clip_cache_item->cache_state(), RasterCacheItem::CacheState::kNone);
 
   layer->Preroll(preroll_context(), initial_transform);
+  LayerTree::TryToRasterCache(cacheable_items(), &paint_context());
   EXPECT_EQ(raster_cache()->GetLayerCachedEntriesCount(), (size_t)0);
-  EXPECT_FALSE(raster_cache()->Draw(layer.get(), cache_canvas,
-                                    RasterCacheLayerStrategy::kLayer));
+  EXPECT_EQ(clip_cache_item->cache_state(), RasterCacheItem::CacheState::kNone);
 
   layer->Preroll(preroll_context(), initial_transform);
+  LayerTree::TryToRasterCache(cacheable_items(), &paint_context());
   EXPECT_EQ(raster_cache()->GetLayerCachedEntriesCount(), (size_t)1);
-  EXPECT_TRUE(raster_cache()->Draw(layer.get(), cache_canvas,
-                                   RasterCacheLayerStrategy::kLayer));
+  EXPECT_EQ(clip_cache_item->cache_state(),
+            RasterCacheItem::CacheState::kCurrent);
+  SkPaint paint;
+  EXPECT_TRUE(raster_cache()->Draw(clip_cache_item->GetId().value(),
+                                   cache_canvas, &paint));
 }
 
 }  // namespace testing

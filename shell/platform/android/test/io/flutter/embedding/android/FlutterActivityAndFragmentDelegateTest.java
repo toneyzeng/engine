@@ -864,23 +864,6 @@ public class FlutterActivityAndFragmentDelegateTest {
   }
 
   @Test
-  public void itNotifiesDartExecutorAndSendsMessageOverSystemChannelWhenInformedOfLowMemory() {
-    // Create the real object that we're testing.
-    FlutterActivityAndFragmentDelegate delegate = new FlutterActivityAndFragmentDelegate(mockHost);
-
-    // --- Execute the behavior under test ---
-    // The FlutterEngine is set up in onAttach().
-    delegate.onAttach(ctx);
-
-    // Emulate the host and call the method that we expect to be forwarded.
-    delegate.onLowMemory();
-
-    // Verify that the call was forwarded to the engine.
-    verify(mockFlutterEngine.getDartExecutor(), times(1)).notifyLowMemoryWarning();
-    verify(mockFlutterEngine.getSystemChannel(), times(1)).sendMemoryPressureWarning();
-  }
-
-  @Test
   public void itDestroysItsOwnEngineIfHostRequestsIt() {
     // ---- Test setup ----
     // Adjust fake host to request engine destruction.
@@ -1055,11 +1038,52 @@ public class FlutterActivityAndFragmentDelegateTest {
     // Verify that the flutterView is visible.
     assertEquals(View.VISIBLE, delegate.flutterView.getVisibility());
     delegate.onStop();
-    // Verify that the flutterView is not visible.
+    // Verify that the flutterView is gone.
     assertEquals(View.GONE, delegate.flutterView.getVisibility());
     delegate.onStart();
     // Verify that the flutterView is visible.
     assertEquals(View.VISIBLE, delegate.flutterView.getVisibility());
+
+    delegate.flutterView.setVisibility(View.INVISIBLE);
+    delegate.onStop();
+    // Verify that the flutterView is gone.
+    assertEquals(View.GONE, delegate.flutterView.getVisibility());
+    delegate.onStart();
+    // Verify that the flutterView is invisible.
+    assertEquals(View.INVISIBLE, delegate.flutterView.getVisibility());
+
+    delegate.flutterView.setVisibility(View.GONE);
+    delegate.onStop();
+    // Verify that the flutterView is gone.
+    assertEquals(View.GONE, delegate.flutterView.getVisibility());
+    delegate.onStart();
+    // Verify that the flutterView is gone.
+    assertEquals(View.GONE, delegate.flutterView.getVisibility());
+  }
+
+  @Test
+  public void flutterSurfaceViewVisibilityChangedWithFlutterView() {
+    // ---- Test setup ----
+    // Create the real object that we're testing.
+    FlutterActivityAndFragmentDelegate delegate = new FlutterActivityAndFragmentDelegate(mockHost);
+    delegate.onAttach(ctx);
+    delegate.onCreateView(null, null, null, 0, true);
+    // --- Execute the behavior under test ---
+    // For `FlutterSurfaceView`, setting visibility to the current `FlutterView` will not take
+    // effect since it is not in the view tree. So we need to make sure that when the visibility of
+    // `FlutterView` changes, the `FlutterSurfaceView` changes at the same time
+    // See https://github.com/flutter/flutter/issues/105203
+    assertEquals(FlutterSurfaceView.class, delegate.flutterView.renderSurface.getClass());
+    FlutterSurfaceView surfaceView = (FlutterSurfaceView) delegate.flutterView.renderSurface;
+    // Verify that the `FlutterSurfaceView` is gone.
+    delegate.flutterView.setVisibility(View.GONE);
+    assertEquals(View.GONE, surfaceView.getVisibility());
+    // Verify that the `FlutterSurfaceView` is visible.
+    delegate.flutterView.setVisibility(View.VISIBLE);
+    assertEquals(View.VISIBLE, surfaceView.getVisibility());
+    // Verify that the `FlutterSurfaceView` is invisible.
+    delegate.flutterView.setVisibility(View.INVISIBLE);
+    assertEquals(View.INVISIBLE, surfaceView.getVisibility());
   }
 
   @Test
