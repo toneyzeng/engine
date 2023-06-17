@@ -3,128 +3,63 @@
 // found in the LICENSE file.
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:ui/src/engine/fonts.dart';
-
-import '../assets.dart';
-import '../dom.dart';
-import '../safe_browser_api.dart';
-import '../util.dart';
-import 'layout_service.dart';
+import 'package:ui/src/engine.dart';
+import 'package:ui/ui_web/src/ui_web.dart' as ui_web;
 
 /// This class is responsible for registering and loading fonts.
 ///
 /// Once an asset manager has been set in the framework, call
-/// [registerFonts] with it to register fonts declared in the
+/// [downloadAssetFonts] with it to register fonts declared in the
 /// font manifest. If test fonts are enabled, then call
-/// [registerTestFonts] as well.
-class HtmlFontCollection implements FontCollection {
-  FontManager? _assetFontManager;
-  FontManager? _testFontManager;
-
-  /// Reads the font manifest using the [assetManager] and registers all of the
+/// [debugDownloadTestFonts] as well.
+class HtmlFontCollection implements FlutterFontCollection {
+  /// Reads the font manifest using the [ui_web.assetManager] and downloads all of the
   /// fonts declared within.
   @override
-  Future<void> registerFonts(AssetManager assetManager) async {
-    ByteData byteData;
+  Future<AssetFontsResult> loadAssetFonts(FontManifest manifest) async {
+    final List<Future<(String, FontLoadError?)>> pendingFonts = <Future<(String, FontLoadError?)>>[];
+    for (final FontFamily family in manifest.families) {
+      for (final FontAsset fontAsset in family.fontAssets) {
+        pendingFonts.add(() async {
+          return (
+            fontAsset.asset,
+            await _loadFontAsset(family.name, fontAsset.asset, fontAsset.descriptors)
+          );
+        }());
+      }
+    }
 
-    try {
-      byteData = await assetManager.load('FontManifest.json');
-    } on AssetManagerException catch (e) {
-      if (e.httpStatus == 404) {
-        printWarning('Font manifest does not exist at `${e.url}` – ignoring.');
-        return;
+    final List<String> loadedFonts = <String>[];
+    final Map<String, FontLoadError> fontFailures = <String, FontLoadError>{};
+    for (final (String asset, FontLoadError? error) in await Future.wait(pendingFonts)) {
+      if (error == null) {
+        loadedFonts.add(asset);
       } else {
-        rethrow;
+        fontFailures[asset] = error;
       }
     }
-
-    final List<dynamic>? fontManifest =
-        json.decode(utf8.decode(byteData.buffer.asUint8List())) as List<dynamic>?;
-    if (fontManifest == null) {
-      throw AssertionError(
-          'There was a problem trying to load FontManifest.json');
-    }
-
-    if (supportsFontLoadingApi) {
-      _assetFontManager = FontManager();
-    } else {
-      _assetFontManager = _PolyfillFontManager();
-    }
-
-    for (final Map<String, dynamic> fontFamily
-        in fontManifest.cast<Map<String, dynamic>>()) {
-      final String? family = fontFamily.tryString('family');
-      final List<Map<String, dynamic>> fontAssets = fontFamily.castList<Map<String, dynamic>>('fonts');
-
-      for (final Map<String, dynamic> fontAsset in fontAssets) {
-        final String asset = fontAsset.readString('asset');
-        final Map<String, String> descriptors = <String, String>{};
-        for (final String descriptor in fontAsset.keys) {
-          if (descriptor != 'asset') {
-            descriptors[descriptor] = '${fontAsset[descriptor]}';
-          }
-        }
-        _assetFontManager!.registerAsset(
-            family!, 'url(${assetManager.getAssetUrl(asset)})', descriptors);
-      }
-    }
+    return AssetFontsResult(loadedFonts, fontFailures);
   }
 
   @override
-  Future<void> loadFontFromList(Uint8List list, {String? fontFamily}) {
+  Future<bool> loadFontFromList(Uint8List list, {String? fontFamily}) async {
     if (fontFamily == null) {
-      throw AssertionError('Font family must be provided to HtmlFontCollection.');
+      printWarning('Font family must be provided to HtmlFontCollection.');
+      return false;
     }
-    return _assetFontManager!._loadFontFaceBytes(fontFamily, list);
+    return _loadFontFaceBytes(fontFamily, list);
   }
 
-  /// Registers fonts that are used by tests.
   @override
-  void debugRegisterTestFonts() {
-    _testFontManager = FontManager();
-    _testFontManager!.registerAsset(
-        ahemFontFamily, 'url($ahemFontUrl)', const <String, String>{});
-    _testFontManager!.registerAsset(robotoFontFamily,
-        'url($robotoTestFontUrl)', const <String, String>{});
-    _testFontManager!.registerAsset(robotoVariableFontFamily,
-        'url($robotoVariableTestFontUrl)', const <String, String>{});
-  }
-
-  /// Returns a [Future] that completes when the registered fonts are loaded
-  /// and ready to be used.
-  @override
-  Future<void> ensureFontsLoaded() async {
-    await _assetFontManager?.ensureFontsLoaded();
-    await _testFontManager?.ensureFontsLoaded();
-  }
+  Null get fontFallbackManager => null;
 
   /// Unregister all fonts that have been registered.
   @override
   void clear() {
-    _assetFontManager = null;
-    _testFontManager = null;
-    if (supportsFontsClearApi) {
-      domDocument.fonts!.clear();
-    }
+    domDocument.fonts!.clear();
   }
-}
-
-/// Manages a collection of fonts and ensures they are loaded.
-class FontManager {
-  factory FontManager() {
-    if (supportsFontLoadingApi) {
-      return FontManager._();
-    } else {
-      return _PolyfillFontManager();
-    }
-  }
-
-  FontManager._();
-
-  final List<Future<void>> _fontLoadingFutures = <Future<void>>[];
 
   // Regular expression to detect a string with no punctuations.
   // For example font family 'Ahem!' does not fall into this category
@@ -143,7 +78,7 @@ class FontManager {
   ///
   /// Safari 12 and Firefox crash if you create a [DomFontFace] with a font
   /// family that is not correct CSS syntax. Font family names with invalid
-  /// characters are accepted accepted on these browsers, when wrapped it in
+  /// characters are accepted on these browsers, when wrapped it in
   /// quotes.
   ///
   /// Additionally, for Safari 12 to work [DomFontFace] name should be
@@ -167,153 +102,86 @@ class FontManager {
   ///
   /// * https://developer.mozilla.org/en-US/docs/Web/CSS/font-family#Valid_family_names
   /// * https://drafts.csswg.org/css-fonts-3/#font-family-prop
-  void registerAsset(
+  Future<FontLoadError?> _loadFontAsset(
     String family,
     String asset,
     Map<String, String> descriptors,
-  ) {
-    if (startWithDigit.hasMatch(family) ||
-        notPunctuation.stringMatch(family) != family) {
-      // Load a font family name with special characters once here wrapped in
-      // quotes.
-      _loadFontFace("'$family'", asset, descriptors);
+  ) async {
+    final List<DomFontFace> fontFaces = <DomFontFace>[];
+    final List<FontLoadError> errors = <FontLoadError>[];
+    try {
+      if (startWithDigit.hasMatch(family) ||
+          notPunctuation.stringMatch(family) != family) {
+        // Load a font family name with special characters once here wrapped in
+        // quotes.
+        fontFaces.add(await _loadFontFace("'$family'", asset, descriptors));
+      }
+    } on FontLoadError catch (error) {
+      errors.add(error);
     }
-    // Load all fonts, without quoted family names.
-    _loadFontFace(family, asset, descriptors);
+    try {
+          // Load all fonts, without quoted family names.
+      fontFaces.add(await _loadFontFace(family, asset, descriptors));
+    } on FontLoadError catch (error) {
+      errors.add(error);
+    }
+    if (fontFaces.isEmpty) {
+      // We failed to load either font face. Return the first error.
+      return errors.first;
+    }
+
+    try {
+      // Since we can't use tear-offs for interop members, this code is faster
+      // and easier to read with a for loop instead of forEach.
+      // ignore: prefer_foreach
+      for (final DomFontFace font in fontFaces) {
+        domDocument.fonts!.add(font);
+      }
+    } catch (e) {
+      return FontInvalidDataError(asset);
+    }
+    return null;
   }
 
-  void _loadFontFace(
+  Future<DomFontFace> _loadFontFace(
     String family,
     String asset,
     Map<String, String> descriptors,
-  ) {
+  ) async {
     // try/catch because `new FontFace` can crash with an improper font family.
     try {
-      final DomFontFace fontFace = createDomFontFace(family, asset, descriptors);
-      _fontLoadingFutures.add(fontFace.load().then((_) {
-        domDocument.fonts!.add(fontFace);
-      }, onError: (dynamic e) {
-        printWarning('Error while trying to load font family "$family":\n$e');
-      }));
+      final DomFontFace fontFace = createDomFontFace(family, 'url(${ui_web.assetManager.getAssetUrl(asset)})', descriptors);
+      return await fontFace.load();
     } catch (e) {
       printWarning('Error while loading font family "$family":\n$e');
+      throw FontDownloadError(asset, e);
     }
   }
 
   // Loads a font from bytes, surfacing errors through the future.
-  Future<void> _loadFontFaceBytes(String family, Uint8List list) {
+  Future<bool> _loadFontFaceBytes(String family, Uint8List list) async {
     // Since these fonts are loaded by user code, surface the error
     // through the returned future.
-    final DomFontFace fontFace = createDomFontFace(family, list);
-    return fontFace.load().then((_) {
+    try {
+      final DomFontFace fontFace = createDomFontFace(family, list);
+      if (fontFace.status == 'error') {
+        // Font failed to load.
+        return false;
+      }
       domDocument.fonts!.add(fontFace);
+
       // There might be paragraph measurements for this new font before it is
       // loaded. They were measured using fallback font, so we should clear the
       // cache.
       Spanometer.clearRulersCache();
-    }, onError: (dynamic exception) {
-      // Failures here will throw an DomException which confusingly
-      // does not implement Exception or Error. Rethrow an Exception so it can
-      // be caught in user code without depending on dart:html or requiring a
-      // catch block without "on".
-      throw Exception(exception.toString());
-    });
+    } catch (exception) {
+      // Failures here will throw an DomException. Return false.
+      return false;
+    }
+    return true;
   }
-
-  /// Returns a [Future] that completes when all fonts that have been
-  /// registered with this font manager have been loaded and are ready to use.
-  Future<void> ensureFontsLoaded() {
-    return Future.wait(_fontLoadingFutures);
-  }
-}
-
-/// A font manager that works without using the CSS Font Loading API.
-///
-/// The CSS Font Loading API is not implemented in IE 11 or Edge. To tell if a
-/// font is loaded, we continuously measure some text using that font until the
-/// width changes.
-class _PolyfillFontManager extends FontManager {
-  _PolyfillFontManager() : super._();
-
-  /// A String containing characters whose width varies greatly between fonts.
-  static const String _testString = 'giItT1WQy@!-/#';
-
-  static const Duration _fontLoadTimeout = Duration(seconds: 2);
-  static const Duration _fontLoadRetryDuration = Duration(milliseconds: 50);
 
   @override
-  void registerAsset(
-    String family,
-    String asset,
-    Map<String, String> descriptors,
-  ) {
-    final DomHTMLParagraphElement paragraph = createDomHTMLParagraphElement();
-    paragraph.style.position = 'absolute';
-    paragraph.style.visibility = 'hidden';
-    paragraph.style.fontSize = '72px';
-    const String fallbackFontName = 'sans-serif';
-    paragraph.style.fontFamily = fallbackFontName;
-    if (descriptors['style'] != null) {
-      paragraph.style.fontStyle = descriptors['style']!;
-    }
-    if (descriptors['weight'] != null) {
-      paragraph.style.fontWeight = descriptors['weight']!;
-    }
-    paragraph.text = _testString;
-
-    domDocument.body!.append(paragraph);
-    final int sansSerifWidth = paragraph.offsetWidth;
-
-    paragraph.style.fontFamily = "'$family', $fallbackFontName";
-
-    final Completer<void> completer = Completer<void>();
-
-    late DateTime fontLoadStart;
-
-    void watchWidth() {
-      if (paragraph.offsetWidth != sansSerifWidth) {
-        paragraph.remove();
-        completer.complete();
-      } else {
-        if (DateTime.now().difference(fontLoadStart) > _fontLoadTimeout) {
-          // Let application waiting for fonts continue with fallback.
-          completer.complete();
-          // Throw unhandled exception for logging.
-          throw Exception('Timed out trying to load font: $family');
-        } else {
-          Timer(_fontLoadRetryDuration, watchWidth);
-        }
-      }
-    }
-
-    final Map<String, String?> fontStyleMap = <String, String?>{};
-    fontStyleMap['font-family'] = "'$family'";
-    fontStyleMap['src'] = asset;
-    if (descriptors['style'] != null) {
-      fontStyleMap['font-style'] = descriptors['style'];
-    }
-    if (descriptors['weight'] != null) {
-      fontStyleMap['font-weight'] = descriptors['weight'];
-    }
-    final String fontFaceDeclaration = fontStyleMap.keys
-        .map((String name) => '$name: ${fontStyleMap[name]};')
-        .join(' ');
-    final DomHTMLStyleElement fontLoadStyle = DomHTMLStyleElement();
-    fontLoadStyle.type = 'text/css';
-    fontLoadStyle.innerHtml = '@font-face { $fontFaceDeclaration }';
-    domDocument.head!.append(fontLoadStyle);
-
-    // HACK: If this is an icon font, then when it loads it won't change the
-    // width of our test string. So we just have to hope it loads before the
-    // layout phase.
-    if (family.toLowerCase().contains('icon')) {
-      paragraph.remove();
-      return;
-    }
-
-    fontLoadStart = DateTime.now();
-    watchWidth();
-
-    _fontLoadingFutures.add(completer.future);
+  void debugResetFallbackFonts() {
   }
 }

@@ -4,6 +4,8 @@
 
 #include "impeller/entity/contents/filters/color_filter_contents.h"
 
+#include <utility>
+
 #include "impeller/base/validation.h"
 #include "impeller/entity/contents/filters/blend_filter_contents.h"
 #include "impeller/entity/contents/filters/color_matrix_filter_contents.h"
@@ -35,7 +37,7 @@ std::shared_ptr<ColorFilterContents> ColorFilterContents::MakeBlend(
   std::shared_ptr<BlendFilterContents> new_blend;
   for (auto in_i = inputs.begin() + 1; in_i < inputs.end(); in_i++) {
     new_blend = std::make_shared<BlendFilterContents>();
-    new_blend->SetInputs({*in_i, blend_input});
+    new_blend->SetInputs({blend_input, *in_i});
     new_blend->SetBlendMode(blend_mode);
     if (in_i < inputs.end() - 1 || foreground_color.has_value()) {
       blend_input = FilterInput::Make(
@@ -57,7 +59,7 @@ std::shared_ptr<ColorFilterContents> ColorFilterContents::MakeColorMatrix(
     FilterInput::Ref input,
     const ColorMatrix& color_matrix) {
   auto filter = std::make_shared<ColorMatrixFilterContents>();
-  filter->SetInputs({input});
+  filter->SetInputs({std::move(input)});
   filter->SetMatrix(color_matrix);
   return filter;
 }
@@ -65,14 +67,14 @@ std::shared_ptr<ColorFilterContents> ColorFilterContents::MakeColorMatrix(
 std::shared_ptr<ColorFilterContents>
 ColorFilterContents::MakeLinearToSrgbFilter(FilterInput::Ref input) {
   auto filter = std::make_shared<LinearToSrgbFilterContents>();
-  filter->SetInputs({input});
+  filter->SetInputs({std::move(input)});
   return filter;
 }
 
 std::shared_ptr<ColorFilterContents>
 ColorFilterContents::MakeSrgbToLinearFilter(FilterInput::Ref input) {
   auto filter = std::make_shared<SrgbToLinearFilterContents>();
-  filter->SetInputs({input});
+  filter->SetInputs({std::move(input)});
   return filter;
 }
 
@@ -86,6 +88,14 @@ void ColorFilterContents::SetAbsorbOpacity(bool absorb_opacity) {
 
 bool ColorFilterContents::GetAbsorbOpacity() const {
   return absorb_opacity_;
+}
+
+void ColorFilterContents::SetAlpha(Scalar alpha) {
+  alpha_ = alpha;
+}
+
+std::optional<Scalar> ColorFilterContents::GetAlpha() const {
+  return alpha_;
 }
 
 }  // namespace impeller

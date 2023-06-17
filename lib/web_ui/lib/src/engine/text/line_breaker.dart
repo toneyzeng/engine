@@ -2,9 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'dart:js_interop';
+
+import '../dom.dart';
 import 'fragmenter.dart';
 import 'line_break_properties.dart';
 import 'unicode_range.dart';
+
+const Set<int> _kNewlines = <int>{
+  0x000A, // LF
+  0x000B, // BK
+  0x000C, // BK
+  0x000D, // CR
+  0x0085, // NL
+  0x2028, // BK
+  0x2029, // BK
+};
+const Set<int> _kSpaces = <int>{
+  0x0020, // SP
+  0x200B, // ZW
+};
 
 /// Various types of line breaks as defined by the Unicode spec.
 enum LineBreakType {
@@ -25,13 +42,108 @@ enum LineBreakType {
 }
 
 /// Splits [text] into fragments based on line breaks.
-class LineBreakFragmenter extends TextFragmenter {
-  const LineBreakFragmenter(super.text);
+abstract class LineBreakFragmenter extends TextFragmenter {
+  factory LineBreakFragmenter(String text) {
+    if (domIntl.v8BreakIterator != null) {
+      return V8LineBreakFragmenter(text);
+    }
+    return FWLineBreakFragmenter(text);
+  }
+
+  @override
+  List<LineBreakFragment> fragment();
+}
+
+/// Flutter web's custom implementation of [LineBreakFragmenter].
+class FWLineBreakFragmenter extends TextFragmenter implements LineBreakFragmenter {
+  FWLineBreakFragmenter(super.text);
 
   @override
   List<LineBreakFragment> fragment() {
     return _computeLineBreakFragments(text);
   }
+}
+
+/// An implementation of [LineBreakFragmenter] that uses V8's
+/// `v8BreakIterator` API to find line breaks in the given [text].
+class V8LineBreakFragmenter extends TextFragmenter implements LineBreakFragmenter {
+  V8LineBreakFragmenter(super.text) : assert(domIntl.v8BreakIterator != null);
+
+  final DomV8BreakIterator _v8BreakIterator = createV8BreakIterator();
+
+  @override
+  List<LineBreakFragment> fragment() {
+    return breakLinesUsingV8BreakIterator(text, text.toJS, _v8BreakIterator);
+  }
+}
+
+List<LineBreakFragment> breakLinesUsingV8BreakIterator(String text, JSString jsText, DomV8BreakIterator iterator) {
+  final List<LineBreakFragment> breaks = <LineBreakFragment>[];
+  int fragmentStart = 0;
+
+  iterator.adoptText(jsText);
+  iterator.first();
+  while (iterator.next() != -1) {
+    final LineBreakType type = _getV8BreakType(text, iterator);
+
+    final int fragmentEnd = iterator.current().toInt();
+    int trailingNewlines = 0;
+    int trailingSpaces = 0;
+
+    // Calculate trailing newlines and spaces.
+    for (int i = fragmentStart; i < fragmentEnd; i++) {
+      final int codeUnit = text.codeUnitAt(i);
+      if (_kNewlines.contains(codeUnit)) {
+        trailingNewlines++;
+        trailingSpaces++;
+      } else if (_kSpaces.contains(codeUnit)) {
+        trailingSpaces++;
+      } else {
+        // Always break after a sequence of spaces.
+        if (trailingSpaces > 0) {
+          breaks.add(LineBreakFragment(
+            fragmentStart,
+            i,
+            LineBreakType.opportunity,
+            trailingNewlines: trailingNewlines,
+            trailingSpaces: trailingSpaces,
+          ));
+          fragmentStart = i;
+          trailingNewlines = 0;
+          trailingSpaces = 0;
+        }
+      }
+    }
+
+    breaks.add(LineBreakFragment(
+      fragmentStart,
+      fragmentEnd,
+      type,
+      trailingNewlines: trailingNewlines,
+      trailingSpaces: trailingSpaces,
+    ));
+    fragmentStart = fragmentEnd;
+  }
+
+  if (breaks.isEmpty || breaks.last.type == LineBreakType.mandatory) {
+    breaks.add(LineBreakFragment(text.length, text.length, LineBreakType.endOfText, trailingNewlines: 0, trailingSpaces: 0));
+  }
+
+  return breaks;
+}
+
+/// Gets break type from v8BreakIterator.
+LineBreakType _getV8BreakType(String text, DomV8BreakIterator iterator) {
+  final int fragmentEnd = iterator.current().toInt();
+
+  // I don't know why v8BreakIterator uses the type "none" to mean "soft break".
+  if (iterator.breakType() != 'none') {
+    return LineBreakType.mandatory;
+  }
+  if (fragmentEnd == text.length) {
+    return LineBreakType.endOfText;
+  }
+  return LineBreakType.opportunity;
 }
 
 class LineBreakFragment extends TextFragment {
@@ -127,10 +239,6 @@ List<LineBreakFragment> _computeLineBreakFragments(String text) {
   int? codePoint = getCodePoint(text, 0);
   LineCharProperty? curr = lineLookup.findForChar(codePoint);
 
-  // When there's a sequence of spaces, this variable contains the base property
-  // i.e. the property of the character preceding the sequence.
-  LineCharProperty baseOfSpaceSequence = LineCharProperty.WJ;
-
   // When there's a sequence of combining marks, this variable contains the base
   // property i.e. the property of the character preceding the sequence.
   LineCharProperty baseOfCombiningMarks = LineCharProperty.AL;
@@ -145,6 +253,9 @@ List<LineBreakFragment> _computeLineBreakFragments(String text) {
     final int fragmentEnd =
         type == LineBreakType.endOfText ? text.length : index;
     assert(fragmentEnd >= fragmentStart);
+
+    // Uncomment the following line to help debug line breaking.
+    // print('{$fragmentStart:$fragmentEnd} [$debugRuleNumber] -- $type');
 
     if (prev1 == LineCharProperty.SP) {
       trailingSpaces++;
@@ -244,13 +355,6 @@ List<LineBreakFragment> _computeLineBreakFragments(String text) {
       break;
     }
 
-    // Establish the base for the space sequence.
-    if (prev1 != LineCharProperty.SP) {
-      // When the text/line starts with SP, we should treat the beginning of text/line
-      // as if it were a WJ (word joiner).
-      baseOfSpaceSequence = prev1 ?? LineCharProperty.WJ;
-    }
-
     // Do not break before spaces or zero width space.
     // LB7: × SP
     //      × ZW
@@ -259,11 +363,17 @@ List<LineBreakFragment> _computeLineBreakFragments(String text) {
       continue;
     }
 
+    // Break after spaces.
+    // LB18: SP ÷
+    if (prev1 == LineCharProperty.SP) {
+      setBreak(LineBreakType.opportunity, 18);
+      continue;
+    }
+
     // Break before any character following a zero-width space, even if one or
     // more spaces intervene.
     // LB8: ZW SP* ÷
-    if (prev1 == LineCharProperty.ZW ||
-        baseOfSpaceSequence == LineCharProperty.ZW) {
+    if (prev1 == LineCharProperty.ZW) {
       setBreak(LineBreakType.opportunity, 8);
       continue;
     }
@@ -343,6 +453,8 @@ List<LineBreakFragment> _computeLineBreakFragments(String text) {
     // The above is a quote from unicode.org. In our implementation, we did the
     // following modification: When there are spaces present, we consider it a
     // line break opportunity.
+    //
+    // We made this modification to match the browser behavior.
     if (prev1 != LineCharProperty.SP &&
         (curr == LineCharProperty.CL ||
             curr == LineCharProperty.CP ||
@@ -358,6 +470,8 @@ List<LineBreakFragment> _computeLineBreakFragments(String text) {
     //
     // The above is a quote from unicode.org. In our implementation, we did the
     // following modification: Allow breaks when there are spaces.
+    //
+    // We made this modification to match the browser behavior.
     if (prev1 == LineCharProperty.OP) {
       setBreak(LineBreakType.prohibited, 14);
       continue;
@@ -368,6 +482,8 @@ List<LineBreakFragment> _computeLineBreakFragments(String text) {
     //
     // The above is a quote from unicode.org. In our implementation, we did the
     // following modification: Allow breaks when there are spaces.
+    //
+    // We made this modification to match the browser behavior.
     if (prev1 == LineCharProperty.QU && curr == LineCharProperty.OP) {
       setBreak(LineBreakType.prohibited, 15);
       continue;
@@ -376,10 +492,12 @@ List<LineBreakFragment> _computeLineBreakFragments(String text) {
     // Do not break between closing punctuation and a nonstarter, even with
     // intervening spaces.
     // LB16: (CL | CP) SP* × NS
-    if ((prev1 == LineCharProperty.CL ||
-            baseOfSpaceSequence == LineCharProperty.CL ||
-            prev1 == LineCharProperty.CP ||
-            baseOfSpaceSequence == LineCharProperty.CP) &&
+    //
+    // The above is a quote from unicode.org. In our implementation, we did the
+    // following modification: Allow breaks when there are spaces.
+    //
+    // We made this modification to match the browser behavior.
+    if ((prev1 == LineCharProperty.CL || prev1 == LineCharProperty.CP) &&
         curr == LineCharProperty.NS) {
       setBreak(LineBreakType.prohibited, 16);
       continue;
@@ -387,17 +505,13 @@ List<LineBreakFragment> _computeLineBreakFragments(String text) {
 
     // Do not break within ‘——’, even with intervening spaces.
     // LB17: B2 SP* × B2
-    if ((prev1 == LineCharProperty.B2 ||
-            baseOfSpaceSequence == LineCharProperty.B2) &&
-        curr == LineCharProperty.B2) {
+    //
+    // The above is a quote from unicode.org. In our implementation, we did the
+    // following modification: Allow breaks when there are spaces.
+    //
+    // We made this modification to match the browser behavior.
+    if (prev1 == LineCharProperty.B2 && curr == LineCharProperty.B2) {
       setBreak(LineBreakType.prohibited, 17);
-      continue;
-    }
-
-    // Break after spaces.
-    // LB18: SP ÷
-    if (prev1 == LineCharProperty.SP) {
-      setBreak(LineBreakType.opportunity, 18);
       continue;
     }
 

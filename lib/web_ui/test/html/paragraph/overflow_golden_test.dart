@@ -9,17 +9,18 @@ import 'package:test/test.dart';
 import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart' hide window;
 
-import '../screenshot.dart';
+import '../../common/test_initialization.dart';
 import 'helper.dart';
-
-typedef CanvasTest = FutureOr<void> Function(EngineCanvas canvas);
 
 void main() {
   internalBootstrapBrowserTest(() => testMain);
 }
 
 Future<void> testMain() async {
-  setUpStableTestFonts();
+  setUpUnitTests(
+    emulateTesterEnvironment: false,
+    setUpTestViewDimensions: false,
+  );
 
   void testEllipsis(EngineCanvas canvas) {
     Offset offset = Offset.zero;
@@ -29,7 +30,7 @@ Future<void> testMain() async {
     const double width = 126.0;
     const double padding = 20.0;
     final SurfacePaintData borderPaint = SurfacePaintData()
-      ..color = black
+      ..color = black.value
       ..style = PaintingStyle.stroke;
 
     paragraph = rich(

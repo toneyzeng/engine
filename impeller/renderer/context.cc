@@ -10,7 +10,7 @@ Context::~Context() = default;
 
 Context::Context() = default;
 
-bool Context::HasThreadingRestrictions() const {
+bool Context::UpdateOffscreenLayerPixelFormat(PixelFormat format) {
   return false;
 }
 

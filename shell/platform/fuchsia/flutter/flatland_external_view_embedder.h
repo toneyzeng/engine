@@ -17,10 +17,10 @@
 #include <vector>
 
 #include "flutter/flow/embedded_views.h"
+#include "flutter/flow/rtree.h"
 #include "flutter/fml/logging.h"
 #include "flutter/fml/macros.h"
 #include "flutter/shell/common/canvas_spy.h"
-#include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkPictureRecorder.h"
 #include "third_party/skia/include/core/SkPoint.h"
 #include "third_party/skia/include/core/SkRect.h"
@@ -59,21 +59,15 @@ class FlatlandExternalViewEmbedder final
   ~FlatlandExternalViewEmbedder();
 
   // |ExternalViewEmbedder|
-  SkCanvas* GetRootCanvas() override;
-
-  // |ExternalViewEmbedder|
-  std::vector<SkCanvas*> GetCurrentCanvases() override;
-
-  // |ExternalViewEmbedder|
-  std::vector<flutter::DisplayListBuilder*> GetCurrentBuilders() override;
+  flutter::DlCanvas* GetRootCanvas() override;
 
   // |ExternalViewEmbedder|
   void PrerollCompositeEmbeddedView(
-      int view_id,
+      int64_t view_id,
       std::unique_ptr<flutter::EmbeddedViewParams> params) override;
 
   // |ExternalViewEmbedder|
-  flutter::EmbedderPaintContext CompositeEmbeddedView(int view_id) override;
+  flutter::DlCanvas* CompositeEmbeddedView(int64_t view_id) override;
 
   // |ExternalViewEmbedder|
   flutter::PostPrerollResult PostPrerollAction(
@@ -93,6 +87,7 @@ class FlatlandExternalViewEmbedder final
 
   // |ExternalViewEmbedder|
   void SubmitFrame(GrDirectContext* context,
+                   const std::shared_ptr<impeller::AiksContext>& aiks_context,
                    std::unique_ptr<flutter::SurfaceFrame> frame) override;
 
   // |ExternalViewEmbedder|
@@ -112,6 +107,12 @@ class FlatlandExternalViewEmbedder final
                          const SkRect& occlusion_hint,
                          bool hit_testable,
                          bool focusable);
+
+  // Holds the clip transform that may be applied on a FlatlandView.
+  struct ClipTransform {
+    fuchsia::ui::composition::TransformId transform_id;
+    std::vector<fuchsia::ui::composition::TransformId> children;
+  };
 
  private:
   void Reset();  // Reset state for a new frame.
@@ -144,23 +145,37 @@ class FlatlandExternalViewEmbedder final
 
   struct EmbedderLayer {
     EmbedderLayer(const SkISize& frame_size,
-                  std::optional<flutter::EmbeddedViewParams> view_params)
-        : embedded_view_params(std::move(view_params)),
+                  std::optional<flutter::EmbeddedViewParams> view_params,
+                  flutter::RTreeFactory rtree_factory)
+        : rtree(rtree_factory.getInstance()),
+          embedded_view_params(std::move(view_params)),
           recorder(std::make_unique<SkPictureRecorder>()),
           canvas_spy(std::make_unique<flutter::CanvasSpy>(
-              recorder->beginRecording(frame_size.width(),
-                                       frame_size.height()))),
-          surface_size(frame_size) {}
+              recorder->beginRecording(SkRect::Make(frame_size),
+                                       &rtree_factory))),
+          surface_size(frame_size),
+          picture(nullptr) {}
+
+    // Records paint operations applied to this layer's `SkCanvas`.
+    // These records are used to determine which portions of this layer
+    // contain content. The embedder propagates this information to scenic, so
+    // that scenic can accurately decide which portions of this layer may
+    // interact with input.
+    sk_sp<flutter::RTree> rtree;
 
     std::optional<flutter::EmbeddedViewParams> embedded_view_params;
     std::unique_ptr<SkPictureRecorder> recorder;
+    // TODO(cyanglaz: use DlOpSpy instead.
+    // https://github.com/flutter/flutter/issues/123805
     std::unique_ptr<flutter::CanvasSpy> canvas_spy;
     SkISize surface_size;
+    sk_sp<SkPicture> picture;
   };
   using EmbedderLayerId = std::optional<uint32_t>;
   constexpr static EmbedderLayerId kRootLayerId = EmbedderLayerId{};
 
   struct FlatlandView {
+    std::vector<ClipTransform> clip_transforms;
     fuchsia::ui::composition::TransformId transform_id;
     fuchsia::ui::composition::ContentId viewport_id;
     ViewMutators mutators;
@@ -191,6 +206,11 @@ class FlatlandExternalViewEmbedder final
   std::vector<fuchsia::ui::composition::TransformId> child_transforms_;
   SkISize frame_size_ = SkISize::Make(0, 0);
   float frame_dpr_ = 1.f;
+
+  // TransformId for the input interceptor node when input shield is turned on,
+  // std::nullptr otherwise.
+  std::optional<fuchsia::ui::composition::TransformId>
+      input_interceptor_transform_;
 
   FML_DISALLOW_COPY_AND_ASSIGN(FlatlandExternalViewEmbedder);
 };

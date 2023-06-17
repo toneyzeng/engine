@@ -7,25 +7,32 @@
 #include <optional>
 #include <sstream>
 
+#include "fml/time/time_point.h"
+#include "impeller/image/backends/skia/compressed_image_skia.h"
 #include "impeller/image/decompressed_image.h"
 #include "impeller/renderer/command_buffer.h"
+#include "impeller/runtime_stage/runtime_stage.h"
 
 #define GLFW_INCLUDE_NONE
 #include "third_party/glfw/include/GLFW/glfw3.h"
 
 #include "flutter/fml/paths.h"
 #include "impeller/base/validation.h"
+#include "impeller/core/allocator.h"
+#include "impeller/core/formats.h"
 #include "impeller/image/compressed_image.h"
 #include "impeller/playground/imgui/imgui_impl_impeller.h"
 #include "impeller/playground/playground.h"
 #include "impeller/playground/playground_impl.h"
-#include "impeller/renderer/allocator.h"
 #include "impeller/renderer/context.h"
-#include "impeller/renderer/formats.h"
 #include "impeller/renderer/render_pass.h"
 #include "impeller/renderer/renderer.h"
 #include "third_party/imgui/backends/imgui_impl_glfw.h"
 #include "third_party/imgui/imgui.h"
+
+#if FML_OS_MACOSX
+#include "fml/platform/darwin/scoped_nsautorelease_pool.h"
+#endif
 
 namespace impeller {
 
@@ -61,22 +68,23 @@ struct Playground::GLFWInitializer {
     //    applicationDidFinishLaunching is never fired.
     static std::once_flag sOnceInitializer;
     std::call_once(sOnceInitializer, []() {
-      FML_CHECK(::glfwInit() == GLFW_TRUE);
       ::glfwSetErrorCallback([](int code, const char* description) {
         FML_LOG(ERROR) << "GLFW Error '" << description << "'  (" << code
                        << ").";
       });
+      FML_CHECK(::glfwInit() == GLFW_TRUE);
     });
   }
 };
 
-Playground::Playground()
-    : glfw_initializer_(std::make_unique<GLFWInitializer>()) {}
+Playground::Playground(PlaygroundSwitches switches)
+    : switches_(switches),
+      glfw_initializer_(std::make_unique<GLFWInitializer>()) {}
 
 Playground::~Playground() = default;
 
 std::shared_ptr<Context> Playground::GetContext() const {
-  return renderer_ ? renderer_->GetContext() : nullptr;
+  return context_;
 }
 
 bool Playground::SupportsBackend(PlaygroundBackend backend) {
@@ -103,25 +111,35 @@ bool Playground::SupportsBackend(PlaygroundBackend backend) {
   FML_UNREACHABLE();
 }
 
-void Playground::SetupWindow(PlaygroundBackend backend) {
+void Playground::SetupContext(PlaygroundBackend backend) {
   FML_CHECK(SupportsBackend(backend));
 
-  impl_ = PlaygroundImpl::Create(backend);
+  impl_ = PlaygroundImpl::Create(backend, switches_);
   if (!impl_) {
+    FML_LOG(WARNING) << "PlaygroundImpl::Create failed.";
     return;
   }
-  auto context = impl_->GetContext();
-  if (!context) {
+
+  context_ = impl_->GetContext();
+}
+
+void Playground::SetupWindow() {
+  if (!context_) {
+    FML_LOG(WARNING)
+        << "Asked to setup a window with no context (call SetupContext first).";
     return;
   }
-  auto renderer = std::make_unique<Renderer>(std::move(context));
+  auto renderer = std::make_unique<Renderer>(context_);
   if (!renderer->IsValid()) {
     return;
   }
   renderer_ = std::move(renderer);
+
+  start_time_ = fml::TimePoint::Now().ToEpochDelta();
 }
 
 void Playground::TeardownWindow() {
+  context_.reset();
   renderer_.reset();
   impl_.reset();
 }
@@ -137,7 +155,7 @@ static void PlaygroundKeyCallback(GLFWwindow* window,
                                   int scancode,
                                   int action,
                                   int mods) {
-  if ((key == GLFW_KEY_ESCAPE || key == GLFW_KEY_Q) && action == GLFW_RELEASE) {
+  if ((key == GLFW_KEY_ESCAPE) && action == GLFW_RELEASE) {
     if (mods & (GLFW_MOD_CONTROL | GLFW_MOD_SUPER | GLFW_MOD_SHIFT)) {
       gShouldOpenNewPlaygrounds = false;
     }
@@ -157,13 +175,17 @@ Point Playground::GetContentScale() const {
   return impl_->GetContentScale();
 }
 
+Scalar Playground::GetSecondsElapsed() const {
+  return (fml::TimePoint::Now().ToEpochDelta() - start_time_).ToSecondsF();
+}
+
 void Playground::SetCursorPosition(Point pos) {
   cursor_position_ = pos;
 }
 
 bool Playground::OpenPlaygroundHere(
     const Renderer::RenderCallback& render_callback) {
-  if (!is_enabled()) {
+  if (!switches_.enable_playground) {
     return true;
   }
 
@@ -180,7 +202,11 @@ bool Playground::OpenPlaygroundHere(
   fml::ScopedCleanupClosure destroy_imgui_context(
       []() { ImGui::DestroyContext(); });
   ImGui::StyleColorsDark();
-  ImGui::GetIO().IniFilename = nullptr;
+
+  auto& io = ImGui::GetIO();
+  io.IniFilename = nullptr;
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  io.ConfigWindowsResizeFromEdges = true;
 
   auto window = reinterpret_cast<GLFWwindow*>(impl_->GetWindowHandle());
   if (!window) {
@@ -195,8 +221,7 @@ bool Playground::OpenPlaygroundHere(
         if (!playground) {
           return;
         }
-        playground->SetWindowSize(
-            ISize{std::max(width, 0), std::max(height, 0)});
+        playground->SetWindowSize(ISize{width, height}.Max({}));
       });
   ::glfwSetKeyCallback(window, &PlaygroundKeyCallback);
   ::glfwSetCursorPosCallback(window, [](GLFWwindow* window, double x,
@@ -212,12 +237,17 @@ bool Playground::OpenPlaygroundHere(
   fml::ScopedCleanupClosure shutdown_imgui_impeller(
       []() { ImGui_ImplImpeller_Shutdown(); });
 
+  ImGui::SetNextWindowPos({10, 10});
+
   ::glfwSetWindowSize(window, GetWindowSize().width, GetWindowSize().height);
   ::glfwSetWindowPos(window, 200, 100);
   ::glfwShowWindow(window);
 
   while (true) {
-    ::glfwWaitEventsTimeout(1.0 / 30.0);
+#if FML_OS_MACOSX
+    fml::ScopedNSAutoreleasePool pool;
+#endif
+    ::glfwPollEvents();
 
     if (::glfwWindowShouldClose(window)) {
       return true;
@@ -229,6 +259,8 @@ bool Playground::OpenPlaygroundHere(
         [render_callback,
          &renderer = renderer_](RenderTarget& render_target) -> bool {
       ImGui::NewFrame();
+      ImGui::DockSpaceOverViewport(ImGui::GetMainViewport(),
+                                   ImGuiDockNodeFlags_PassthruCentralNode);
       bool result = render_callback(render_target);
       ImGui::Render();
 
@@ -253,35 +285,8 @@ bool Playground::OpenPlaygroundHere(
         }
         render_target.SetColorAttachment(color0, 0);
 
-#ifndef IMPELLER_ENABLE_VULKAN
-        {
-          TextureDescriptor stencil0_tex;
-          stencil0_tex.storage_mode = StorageMode::kDeviceTransient;
-          stencil0_tex.type = TextureType::kTexture2D;
-          stencil0_tex.sample_count = SampleCount::kCount1;
-          stencil0_tex.format = PixelFormat::kDefaultStencil;
-          stencil0_tex.size = color0.texture->GetSize();
-          stencil0_tex.usage =
-              static_cast<TextureUsageMask>(TextureUsage::kRenderTarget);
-          auto stencil_texture =
-              renderer->GetContext()->GetResourceAllocator()->CreateTexture(
-                  stencil0_tex);
-
-          if (!stencil_texture) {
-            VALIDATION_LOG << "Could not create stencil texture.";
-            return false;
-          }
-          stencil_texture->SetLabel("ImguiStencil");
-
-          StencilAttachment stencil0;
-          stencil0.texture = stencil_texture;
-          stencil0.clear_stencil = 0;
-          stencil0.load_action = LoadAction::kClear;
-          stencil0.store_action = StoreAction::kDontCare;
-
-          render_target.SetStencilAttachment(stencil0);
-        }
-#endif
+        render_target.SetStencilAttachment(std::nullopt);
+        render_target.SetDepthAttachment(std::nullopt);
 
         auto pass = buffer->CreateRenderPass(render_target);
         if (!pass) {
@@ -304,6 +309,10 @@ bool Playground::OpenPlaygroundHere(
                            wrapped_callback)) {
       VALIDATION_LOG << "Could not render into the surface.";
       return false;
+    }
+
+    if (!ShouldKeepRendering()) {
+      break;
     }
   }
 
@@ -339,16 +348,20 @@ bool Playground::OpenPlaygroundHere(SinglePassCallback pass_callback) {
       });
 }
 
-std::optional<DecompressedImage> Playground::LoadFixtureImageRGBA(
-    const char* fixture_name) const {
-  if (!renderer_ || fixture_name == nullptr) {
-    return std::nullopt;
-  }
-
-  auto compressed_image =
-      CompressedImage::Create(OpenAssetAsMapping(fixture_name));
+std::shared_ptr<CompressedImage> Playground::LoadFixtureImageCompressed(
+    std::shared_ptr<fml::Mapping> mapping) {
+  auto compressed_image = CompressedImageSkia::Create(std::move(mapping));
   if (!compressed_image) {
     VALIDATION_LOG << "Could not create compressed image.";
+    return nullptr;
+  }
+
+  return compressed_image;
+}
+
+std::optional<DecompressedImage> Playground::DecodeImageRGBA(
+    const std::shared_ptr<CompressedImage>& compressed) {
+  if (compressed == nullptr) {
     return std::nullopt;
   }
   // The decoded image is immediately converted into RGBA as that format is
@@ -356,44 +369,115 @@ std::optional<DecompressedImage> Playground::LoadFixtureImageRGBA(
   // bit pixel strides, this is overkill. Since this is a test fixture we
   // aren't necessarily trying to eke out memory savings here and instead
   // favor simplicity.
-  auto image = compressed_image->Decode().ConvertToRGBA();
+  auto image = compressed->Decode().ConvertToRGBA();
   if (!image.IsValid()) {
-    VALIDATION_LOG << "Could not find fixture named " << fixture_name;
+    VALIDATION_LOG << "Could not decode image.";
     return std::nullopt;
   }
 
   return image;
 }
 
-std::shared_ptr<Texture> Playground::CreateTextureForFixture(
-    const char* fixture_name,
-    bool enable_mipmapping) const {
-  auto image = LoadFixtureImageRGBA(fixture_name);
+static std::shared_ptr<Texture> CreateTextureForDecompressedImage(
+    const std::shared_ptr<Context>& context,
+    DecompressedImage& decompressed_image,
+    bool enable_mipmapping) {
+  // TODO(https://github.com/flutter/flutter/issues/123468): copying buffers to
+  // textures is not implemented for GLES.
+  if (context->GetCapabilities()->SupportsBufferToTextureBlits()) {
+    impeller::TextureDescriptor texture_descriptor;
+    texture_descriptor.storage_mode = impeller::StorageMode::kDevicePrivate;
+    texture_descriptor.format = PixelFormat::kR8G8B8A8UNormInt;
+    texture_descriptor.size = decompressed_image.GetSize();
+    texture_descriptor.mip_count =
+        enable_mipmapping ? decompressed_image.GetSize().MipCount() : 1u;
+
+    auto dest_texture =
+        context->GetResourceAllocator()->CreateTexture(texture_descriptor);
+    if (!dest_texture) {
+      FML_DLOG(ERROR) << "Could not create Impeller texture.";
+      return nullptr;
+    }
+
+    auto buffer = context->GetResourceAllocator()->CreateBufferWithCopy(
+        *decompressed_image.GetAllocation().get());
+
+    dest_texture->SetLabel(
+        impeller::SPrintF("ui.Image(%p)", dest_texture.get()).c_str());
+
+    auto command_buffer = context->CreateCommandBuffer();
+    if (!command_buffer) {
+      FML_DLOG(ERROR)
+          << "Could not create command buffer for mipmap generation.";
+      return nullptr;
+    }
+    command_buffer->SetLabel("Mipmap Command Buffer");
+
+    auto blit_pass = command_buffer->CreateBlitPass();
+    if (!blit_pass) {
+      FML_DLOG(ERROR) << "Could not create blit pass for mipmap generation.";
+      return nullptr;
+    }
+    blit_pass->SetLabel("Mipmap Blit Pass");
+    blit_pass->AddCopy(buffer->AsBufferView(), dest_texture);
+    if (enable_mipmapping) {
+      blit_pass->GenerateMipmap(dest_texture);
+    }
+
+    blit_pass->EncodeCommands(context->GetResourceAllocator());
+    if (!command_buffer->SubmitCommands()) {
+      FML_DLOG(ERROR) << "Failed to submit blit pass command buffer.";
+      return nullptr;
+    }
+    return dest_texture;
+  } else {  // Doesn't support buffer-to-texture blits.
+    auto texture_descriptor = TextureDescriptor{};
+    texture_descriptor.storage_mode = StorageMode::kHostVisible;
+    texture_descriptor.format = PixelFormat::kR8G8B8A8UNormInt;
+    texture_descriptor.size = decompressed_image.GetSize();
+    texture_descriptor.mip_count =
+        enable_mipmapping ? decompressed_image.GetSize().MipCount() : 1u;
+
+    auto texture =
+        context->GetResourceAllocator()->CreateTexture(texture_descriptor);
+    if (!texture) {
+      VALIDATION_LOG << "Could not allocate texture for fixture.";
+      return nullptr;
+    }
+
+    auto uploaded = texture->SetContents(decompressed_image.GetAllocation());
+    if (!uploaded) {
+      VALIDATION_LOG
+          << "Could not upload texture to device memory for fixture.";
+      return nullptr;
+    }
+    return texture;
+  }
+}
+
+std::shared_ptr<Texture> Playground::CreateTextureForMapping(
+    const std::shared_ptr<Context>& context,
+    std::shared_ptr<fml::Mapping> mapping,
+    bool enable_mipmapping) {
+  auto image = Playground::DecodeImageRGBA(
+      Playground::LoadFixtureImageCompressed(std::move(mapping)));
   if (!image.has_value()) {
     return nullptr;
   }
+  return CreateTextureForDecompressedImage(context, image.value(),
+                                           enable_mipmapping);
+}
 
-  auto texture_descriptor = TextureDescriptor{};
-  texture_descriptor.storage_mode = StorageMode::kHostVisible;
-  texture_descriptor.format = PixelFormat::kR8G8B8A8UNormInt;
-  texture_descriptor.size = image->GetSize();
-  texture_descriptor.mip_count =
-      enable_mipmapping ? image->GetSize().MipCount() : 1u;
-
-  auto texture = renderer_->GetContext()->GetResourceAllocator()->CreateTexture(
-      texture_descriptor);
-  if (!texture) {
-    VALIDATION_LOG << "Could not allocate texture for fixture " << fixture_name;
+std::shared_ptr<Texture> Playground::CreateTextureForFixture(
+    const char* fixture_name,
+    bool enable_mipmapping) const {
+  auto texture = CreateTextureForMapping(renderer_->GetContext(),
+                                         OpenAssetAsMapping(fixture_name),
+                                         enable_mipmapping);
+  if (texture == nullptr) {
     return nullptr;
   }
   texture->SetLabel(fixture_name);
-
-  auto uploaded = texture->SetContents(image->GetAllocation());
-  if (!uploaded) {
-    VALIDATION_LOG << "Could not upload texture to device memory for fixture "
-                   << fixture_name;
-    return nullptr;
-  }
   return texture;
 }
 
@@ -401,7 +485,8 @@ std::shared_ptr<Texture> Playground::CreateTextureCubeForFixture(
     std::array<const char*, 6> fixture_names) const {
   std::array<DecompressedImage, 6> images;
   for (size_t i = 0; i < fixture_names.size(); i++) {
-    auto image = LoadFixtureImageRGBA(fixture_names[i]);
+    auto image = DecodeImageRGBA(
+        LoadFixtureImageCompressed(OpenAssetAsMapping(fixture_names[i])));
     if (!image.has_value()) {
       return nullptr;
     }
@@ -438,6 +523,10 @@ std::shared_ptr<Texture> Playground::CreateTextureCubeForFixture(
 
 void Playground::SetWindowSize(ISize size) {
   window_size_ = size;
+}
+
+bool Playground::ShouldKeepRendering() const {
+  return true;
 }
 
 }  // namespace impeller

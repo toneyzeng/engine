@@ -5,10 +5,20 @@
 #include "impeller/renderer/backend/metal/texture_mtl.h"
 
 #include "impeller/base/validation.h"
+#include "impeller/core/texture_descriptor.h"
 
 namespace impeller {
 
-TextureMTL::TextureMTL(TextureDescriptor p_desc, id<MTLTexture> texture)
+std::shared_ptr<Texture> WrapperMTL(TextureDescriptor desc,
+                                    const void* mtl_texture,
+                                    std::function<void()> deletion_proc) {
+  return TextureMTL::Wrapper(desc, (__bridge id<MTLTexture>)mtl_texture,
+                             std::move(deletion_proc));
+}
+
+TextureMTL::TextureMTL(TextureDescriptor p_desc,
+                       id<MTLTexture> texture,
+                       bool wrapped)
     : Texture(p_desc), texture_(texture) {
   const auto& desc = GetTextureDescriptor();
 
@@ -21,7 +31,22 @@ TextureMTL::TextureMTL(TextureDescriptor p_desc, id<MTLTexture> texture)
     return;
   }
 
+  is_wrapped_ = wrapped;
   is_valid_ = true;
+}
+
+std::shared_ptr<TextureMTL> TextureMTL::Wrapper(
+    TextureDescriptor desc,
+    id<MTLTexture> texture,
+    std::function<void()> deletion_proc) {
+  if (deletion_proc) {
+    return std::shared_ptr<TextureMTL>(
+        new TextureMTL(desc, texture, true),
+        [deletion_proc = std::move(deletion_proc)](TextureMTL* t) {
+          deletion_proc();
+        });
+  }
+  return std::shared_ptr<TextureMTL>(new TextureMTL(desc, texture, true));
 }
 
 TextureMTL::~TextureMTL() = default;
@@ -42,7 +67,7 @@ bool TextureMTL::OnSetContents(std::shared_ptr<const fml::Mapping> mapping,
 bool TextureMTL::OnSetContents(const uint8_t* contents,
                                size_t length,
                                size_t slice) {
-  if (!IsValid() || !contents) {
+  if (!IsValid() || !contents || is_wrapped_) {
     return false;
   }
 
@@ -53,10 +78,6 @@ bool TextureMTL::OnSetContents(const uint8_t* contents,
     return false;
   }
 
-  // TODO(csg): Perhaps the storage mode should be added to the texture
-  // descriptor so that invalid region replacements on potentially non-host
-  // visible textures are disallowed. The annoying bit about the API below is
-  // that there seems to be no error handling guidance.
   const auto region =
       MTLRegionMake2D(0u, 0u, desc.size.width, desc.size.height);
   [texture_ replaceRegion:region                            //
@@ -81,6 +102,21 @@ id<MTLTexture> TextureMTL::GetMTLTexture() const {
 
 bool TextureMTL::IsValid() const {
   return is_valid_;
+}
+
+bool TextureMTL::IsWrapped() const {
+  return is_wrapped_;
+}
+
+bool TextureMTL::GenerateMipmap(id<MTLBlitCommandEncoder> encoder) {
+  if (!texture_) {
+    return false;
+  }
+
+  [encoder generateMipmapsForTexture:texture_];
+  mipmap_generated_ = true;
+
+  return true;
 }
 
 }  // namespace impeller

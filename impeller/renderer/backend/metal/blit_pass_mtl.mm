@@ -11,6 +11,9 @@
 #include "flutter/fml/logging.h"
 #include "flutter/fml/trace_event.h"
 #include "impeller/base/backend_cast.h"
+#include "impeller/core/formats.h"
+#include "impeller/core/host_buffer.h"
+#include "impeller/core/shader_types.h"
 #include "impeller/renderer/backend/metal/blit_command_mtl.h"
 #include "impeller/renderer/backend/metal/device_buffer_mtl.h"
 #include "impeller/renderer/backend/metal/formats_mtl.h"
@@ -18,9 +21,6 @@
 #include "impeller/renderer/backend/metal/sampler_mtl.h"
 #include "impeller/renderer/backend/metal/texture_mtl.h"
 #include "impeller/renderer/blit_command.h"
-#include "impeller/renderer/formats.h"
-#include "impeller/renderer/host_buffer.h"
-#include "impeller/renderer/shader_types.h"
 
 namespace impeller {
 
@@ -80,7 +80,7 @@ bool BlitPassMTL::EncodeCommands(id<MTLBlitCommandEncoder> encoder) const {
       auto_pop_debug_marker.Release();
     }
 
-    if (command->Encode(encoder)) {
+    if (!command->Encode(encoder)) {
       return false;
     }
   }
@@ -88,7 +88,7 @@ bool BlitPassMTL::EncodeCommands(id<MTLBlitCommandEncoder> encoder) const {
 }
 
 // |BlitPass|
-void BlitPassMTL::OnCopyTextureToTextureCommand(
+bool BlitPassMTL::OnCopyTextureToTextureCommand(
     std::shared_ptr<Texture> source,
     std::shared_ptr<Texture> destination,
     IRect source_region,
@@ -102,16 +102,51 @@ void BlitPassMTL::OnCopyTextureToTextureCommand(
   command->destination_origin = destination_origin;
 
   commands_.emplace_back(std::move(command));
+  return true;
 }
 
 // |BlitPass|
-void BlitPassMTL::OnGenerateMipmapCommand(std::shared_ptr<Texture> texture,
+bool BlitPassMTL::OnCopyTextureToBufferCommand(
+    std::shared_ptr<Texture> source,
+    std::shared_ptr<DeviceBuffer> destination,
+    IRect source_region,
+    size_t destination_offset,
+    std::string label) {
+  auto command = std::make_unique<BlitCopyTextureToBufferCommandMTL>();
+  command->label = label;
+  command->source = std::move(source);
+  command->destination = std::move(destination);
+  command->source_region = source_region;
+  command->destination_offset = destination_offset;
+
+  commands_.emplace_back(std::move(command));
+  return true;
+}
+
+bool BlitPassMTL::OnCopyBufferToTextureCommand(
+    BufferView source,
+    std::shared_ptr<Texture> destination,
+    IPoint destination_origin,
+    std::string label) {
+  auto command = std::make_unique<BlitCopyBufferToTextureCommandMTL>();
+  command->label = label;
+  command->source = std::move(source);
+  command->destination = std::move(destination);
+  command->destination_origin = destination_origin;
+
+  commands_.emplace_back(std::move(command));
+  return true;
+}
+
+// |BlitPass|
+bool BlitPassMTL::OnGenerateMipmapCommand(std::shared_ptr<Texture> texture,
                                           std::string label) {
   auto command = std::make_unique<BlitGenerateMipmapCommandMTL>();
   command->label = label;
   command->texture = std::move(texture);
 
   commands_.emplace_back(std::move(command));
+  return true;
 }
 
 }  // namespace impeller

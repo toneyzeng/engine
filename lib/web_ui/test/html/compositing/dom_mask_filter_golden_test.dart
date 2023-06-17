@@ -6,6 +6,7 @@ import 'package:test/bootstrap/browser.dart';
 import 'package:test/test.dart';
 import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart' hide TextStyle;
+import '../../common/test_initialization.dart';
 import '../screenshot.dart';
 
 void main() {
@@ -13,12 +14,9 @@ void main() {
 }
 
 Future<void> testMain() async {
-  setUp(() async {
-    debugEmulateFlutterTesterEnvironment = true;
-    await webOnlyInitializePlatform();
-    renderer.fontCollection.debugRegisterTestFonts();
-    await renderer.fontCollection.ensureFontsLoaded();
-  });
+  setUpUnitTests(
+    setUpTestViewDimensions: false,
+  );
 
   test('Should blur rectangles based on sigma.', () async {
     final RecordingCanvas rc =

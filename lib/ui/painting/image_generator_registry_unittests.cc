@@ -8,6 +8,8 @@
 #include "flutter/shell/common/shell_test.h"
 #include "flutter/testing/testing.h"
 
+#include "third_party/skia/include/codec/SkCodecAnimation.h"
+
 namespace flutter {
 namespace testing {
 
@@ -60,7 +62,7 @@ class FakeImageGenerator : public ImageGenerator {
 
   unsigned int GetPlayCount() const { return 1; }
 
-  const ImageGenerator::FrameInfo GetFrameInfo(unsigned int frame_index) const {
+  const ImageGenerator::FrameInfo GetFrameInfo(unsigned int frame_index) {
     return {std::nullopt, 0, SkCodecAnimation::DisposalMethod::kKeep};
   }
 

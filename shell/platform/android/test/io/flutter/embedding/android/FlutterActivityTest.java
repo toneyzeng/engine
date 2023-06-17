@@ -92,7 +92,7 @@ public class FlutterActivityTest {
   // test that directly exercises the OnBackInvoked APIs when API 33 is supported.
   @Test
   @TargetApi(33)
-  public void itRegistersOnBackInvokedCallbackOnCreate() {
+  public void itRegistersOnBackInvokedCallbackOnChangingFrameworkHandlesBack() {
     Intent intent = FlutterActivityWithReportFullyDrawn.createDefaultIntent(ctx);
     ActivityController<FlutterActivityWithReportFullyDrawn> activityController =
         Robolectric.buildActivity(FlutterActivityWithReportFullyDrawn.class, intent);
@@ -100,6 +100,12 @@ public class FlutterActivityTest {
 
     activity.onCreate(null);
 
+    verify(activity, times(0)).registerOnBackInvokedCallback();
+
+    activity.setFrameworkHandlesBack(false);
+    verify(activity, times(0)).registerOnBackInvokedCallback();
+
+    activity.setFrameworkHandlesBack(true);
     verify(activity, times(1)).registerOnBackInvokedCallback();
   }
 
@@ -187,6 +193,31 @@ public class FlutterActivityTest {
     assertTrue(flutterActivity.shouldAttachEngineToActivity());
     assertNull(flutterActivity.getCachedEngineId());
     assertTrue(flutterActivity.shouldDestroyEngineWithHost());
+    assertEquals(BackgroundMode.transparent, flutterActivity.getBackgroundMode());
+    assertEquals(RenderMode.texture, flutterActivity.getRenderMode());
+    assertEquals(TransparencyMode.transparent, flutterActivity.getTransparencyMode());
+  }
+
+  @Test
+  public void itCreatesNewEngineInGroupIntentWithRequestedSettings() {
+    Intent intent =
+        FlutterActivity.withNewEngineInGroup("my_cached_engine_group")
+            .dartEntrypoint("custom_entrypoint")
+            .initialRoute("/custom/route")
+            .backgroundMode(BackgroundMode.transparent)
+            .build(ctx);
+    ActivityController<FlutterActivity> activityController =
+        Robolectric.buildActivity(FlutterActivity.class, intent);
+    FlutterActivity flutterActivity = activityController.get();
+    flutterActivity.setDelegate(new FlutterActivityAndFragmentDelegate(flutterActivity));
+
+    assertEquals("my_cached_engine_group", flutterActivity.getCachedEngineGroupId());
+    assertEquals("custom_entrypoint", flutterActivity.getDartEntrypointFunctionName());
+    assertEquals("/custom/route", flutterActivity.getInitialRoute());
+    assertArrayEquals(new String[] {}, flutterActivity.getFlutterShellArgs().toArray());
+    assertTrue(flutterActivity.shouldAttachEngineToActivity());
+    assertTrue(flutterActivity.shouldDestroyEngineWithHost());
+    assertNull(flutterActivity.getCachedEngineId());
     assertEquals(BackgroundMode.transparent, flutterActivity.getBackgroundMode());
     assertEquals(RenderMode.texture, flutterActivity.getRenderMode());
     assertEquals(TransparencyMode.transparent, flutterActivity.getTransparencyMode());

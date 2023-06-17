@@ -8,50 +8,34 @@
 
 #include "flutter/fml/macros.h"
 #include "impeller/base/backend_cast.h"
+#include "impeller/core/device_buffer.h"
 #include "impeller/renderer/backend/vulkan/context_vk.h"
-#include "impeller/renderer/device_buffer.h"
 
 namespace impeller {
 
-class DeviceBufferAllocationVK {
- public:
-  DeviceBufferAllocationVK(const VmaAllocator& allocator,
-                           VkBuffer buffer,
-                           VmaAllocation allocation,
-                           VmaAllocationInfo allocation_info);
-
-  ~DeviceBufferAllocationVK();
-
-  vk::Buffer GetBufferHandle() const;
-
-  void* GetMapping() const;
-
- private:
-  const VmaAllocator& allocator_;
-  vk::Buffer buffer_;
-  VmaAllocation allocation_;
-  VmaAllocationInfo allocation_info_;
-
-  FML_DISALLOW_COPY_AND_ASSIGN(DeviceBufferAllocationVK);
-};
-
 class DeviceBufferVK final : public DeviceBuffer,
-                             public BackendCast<DeviceBufferVK, DeviceBuffer> {
+                             public BackendCast<DeviceBufferVK, Buffer> {
  public:
   DeviceBufferVK(DeviceBufferDescriptor desc,
-                 ContextVK& context,
-                 std::unique_ptr<DeviceBufferAllocationVK> device_allocation);
+                 std::weak_ptr<Context> context,
+                 VmaAllocator allocator,
+                 VmaAllocation allocation,
+                 VmaAllocationInfo info,
+                 vk::Buffer buffer);
 
   // |DeviceBuffer|
   ~DeviceBufferVK() override;
 
-  vk::Buffer GetVKBufferHandle() const;
+  vk::Buffer GetBuffer() const;
 
  private:
   friend class AllocatorVK;
 
-  ContextVK& context_;
-  std::unique_ptr<DeviceBufferAllocationVK> device_allocation_;
+  std::weak_ptr<Context> context_;
+  VmaAllocator allocator_ = {};
+  VmaAllocation allocation_ = {};
+  VmaAllocationInfo info_ = {};
+  vk::Buffer buffer_ = {};
 
   // |DeviceBuffer|
   uint8_t* OnGetContents() const override;

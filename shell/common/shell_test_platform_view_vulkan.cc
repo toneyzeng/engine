@@ -7,8 +7,13 @@
 #include <utility>
 
 #include "flutter/common/graphics/persistent_cache.h"
+#include "flutter/flutter_vma/flutter_skia_vma.h"
 #include "flutter/shell/common/context_options.h"
+#include "flutter/vulkan/vulkan_skia_proc_table.h"
 #include "flutter/vulkan/vulkan_utilities.h"
+
+#include "third_party/skia/include/core/SkSurface.h"
+#include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
 
 #if OS_FUCHSIA
 #define VULKAN_SO_PATH "libvulkan.so"
@@ -111,6 +116,11 @@ ShellTestPlatformViewVulkan::OffScreenSurface::OffScreenSurface(
     return;
   }
 
+  memory_allocator_ = FlutterSkiaVulkanMemoryAllocator::Make(
+      application_->GetAPIVersion(), application_->GetInstance(),
+      logical_device_->GetPhysicalDeviceHandle(), logical_device_->GetHandle(),
+      vk_, true);
+
   // Create the Skia GrContext.
   if (!CreateSkiaGrContext()) {
     FML_DLOG(ERROR) << "Could not create Skia context.";
@@ -148,7 +158,7 @@ bool ShellTestPlatformViewVulkan::OffScreenSurface::CreateSkiaGrContext() {
 
 bool ShellTestPlatformViewVulkan::OffScreenSurface::CreateSkiaBackendContext(
     GrVkBackendContext* context) {
-  auto getProc = vk_->CreateSkiaGetProc();
+  auto getProc = CreateSkiaGetProc(vk_);
 
   if (getProc == nullptr) {
     FML_DLOG(ERROR) << "GetProcAddress is null";
@@ -171,6 +181,8 @@ bool ShellTestPlatformViewVulkan::OffScreenSurface::CreateSkiaBackendContext(
   context->fFeatures = skia_features;
   context->fGetProc = std::move(getProc);
   context->fOwnsInstanceAndDevice = false;
+  context->fMemoryAllocator = memory_allocator_;
+
   return true;
 }
 
@@ -185,11 +197,11 @@ ShellTestPlatformViewVulkan::OffScreenSurface::AcquireFrame(
     const SkISize& size) {
   auto image_info = SkImageInfo::Make(size, SkColorType::kRGBA_8888_SkColorType,
                                       SkAlphaType::kOpaque_SkAlphaType);
-  auto surface = SkSurface::MakeRenderTarget(context_.get(), SkBudgeted::kNo,
-                                             image_info, 0, nullptr);
+  auto surface = SkSurfaces::RenderTarget(context_.get(), skgpu::Budgeted::kNo,
+                                          image_info, 0, nullptr);
   SurfaceFrame::SubmitCallback callback = [](const SurfaceFrame&,
-                                             SkCanvas* canvas) -> bool {
-    canvas->flush();
+                                             DlCanvas* canvas) -> bool {
+    canvas->Flush();
     return true;
   };
 

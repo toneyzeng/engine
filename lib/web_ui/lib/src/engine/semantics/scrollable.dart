@@ -121,7 +121,7 @@ class Scrollable extends RoleManager {
       };
       semanticsObject.owner.addGestureModeListener(_gestureModeListener);
 
-      _scrollListener = allowInterop((_) {
+      _scrollListener = createDomEventListener((_) {
         _recomputeScrollPosition();
       });
       semanticsObject.element.addEventListener('scroll', _scrollListener);
@@ -131,10 +131,10 @@ class Scrollable extends RoleManager {
   /// The value of "scrollTop" or "scrollLeft", depending on the scroll axis.
   int get _domScrollPosition {
     if (semanticsObject.isVerticalScrollContainer) {
-      return semanticsObject.element.scrollTop;
+      return semanticsObject.element.scrollTop.toInt();
     } else {
       assert(semanticsObject.isHorizontalScrollContainer);
-      return semanticsObject.element.scrollLeft;
+      return semanticsObject.element.scrollLeft.toInt();
     }
   }
 
@@ -167,9 +167,9 @@ class Scrollable extends RoleManager {
         ..width = '${rect.width.round()}px'
         ..height = '${canonicalNeutralScrollPosition}px';
 
-      element.scrollTop = canonicalNeutralScrollPosition;
+      element.scrollTop = canonicalNeutralScrollPosition.toDouble();
       // Read back because the effective value depends on the amount of content.
-      _effectiveNeutralScrollPosition = element.scrollTop;
+      _effectiveNeutralScrollPosition = element.scrollTop.toInt();
       semanticsObject
         ..verticalContainerAdjustment =
             _effectiveNeutralScrollPosition.toDouble()
@@ -184,9 +184,9 @@ class Scrollable extends RoleManager {
         ..width = '${canonicalNeutralScrollPosition}px'
         ..height = '${rect.height.round()}px';
 
-      element.scrollLeft = canonicalNeutralScrollPosition;
+      element.scrollLeft = canonicalNeutralScrollPosition.toDouble();
       // Read back because the effective value depends on the amount of content.
-      _effectiveNeutralScrollPosition = element.scrollLeft;
+      _effectiveNeutralScrollPosition = element.scrollLeft.toInt();
       semanticsObject
         ..verticalContainerAdjustment = 0.0
         ..horizontalContainerAdjustment =
@@ -209,7 +209,6 @@ class Scrollable extends RoleManager {
           assert(semanticsObject.isHorizontalScrollContainer);
           element.style.overflowX = 'scroll';
         }
-        break;
       case GestureMode.pointerEvents:
         // We use "hidden" instead of "scroll" so that the browser does
         // not "steal" pointer events. Flutter gesture recognizers need
@@ -220,12 +219,12 @@ class Scrollable extends RoleManager {
           assert(semanticsObject.isHorizontalScrollContainer);
           element.style.overflowX = 'hidden';
         }
-        break;
     }
   }
 
   @override
   void dispose() {
+    super.dispose();
     final DomCSSStyleDeclaration style = semanticsObject.element.style;
     assert(_gestureModeListener != null);
     style.removeProperty('overflowY');

@@ -17,7 +17,7 @@ namespace flutter {
 class PlatformViewAndroidJNIImpl final : public PlatformViewAndroidJNI {
  public:
   explicit PlatformViewAndroidJNIImpl(
-      fml::jni::JavaObjectWeakGlobalRef java_object);
+      const fml::jni::JavaObjectWeakGlobalRef& java_object);
 
   ~PlatformViewAndroidJNIImpl() override;
 
@@ -81,6 +81,12 @@ class PlatformViewAndroidJNIImpl final : public PlatformViewAndroidJNI {
       std::vector<std::string> supported_locales_data) override;
 
   double GetDisplayRefreshRate() override;
+
+  double GetDisplayWidth() override;
+
+  double GetDisplayHeight() override;
+
+  double GetDisplayDensity() override;
 
   bool RequestDartDeferredLibrary(int loading_unit_id) override;
 

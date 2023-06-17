@@ -16,6 +16,7 @@ enum TargetPlatform:byte {
   kMetal,
   kOpenGLES,
   kSkSL,
+  kVulkan,
 }
 
 enum UniformDataType:uint32 {
@@ -50,6 +51,7 @@ table RuntimeStage {
   entrypoint: string;
   uniforms: [UniformDescription];
   shader: [ubyte];
+  sksl: [ubyte];
 }
 
 root_type RuntimeStage;

@@ -24,6 +24,8 @@ import io.flutter.FlutterInjector;
 import io.flutter.Log;
 import io.flutter.embedding.engine.FlutterEngine;
 import io.flutter.embedding.engine.FlutterEngineCache;
+import io.flutter.embedding.engine.FlutterEngineGroup;
+import io.flutter.embedding.engine.FlutterEngineGroupCache;
 import io.flutter.embedding.engine.FlutterShellArgs;
 import io.flutter.embedding.engine.dart.DartExecutor;
 import io.flutter.embedding.engine.renderer.FlutterUiDisplayListener;
@@ -88,6 +90,7 @@ import java.util.List;
   private boolean isFirstFrameRendered;
   private boolean isAttached;
   private Integer previousVisibility;
+  @Nullable private FlutterEngineGroup engineGroup;
 
   @NonNull
   private final FlutterUiDisplayListener flutterUiDisplayListener =
@@ -107,8 +110,13 @@ import java.util.List;
       };
 
   FlutterActivityAndFragmentDelegate(@NonNull Host host) {
+    this(host, null);
+  }
+
+  FlutterActivityAndFragmentDelegate(@NonNull Host host, @Nullable FlutterEngineGroup engineGroup) {
     this.host = host;
     this.isFirstFrameRendered = false;
+    this.engineGroup = engineGroup;
   }
 
   /**
@@ -218,6 +226,28 @@ import java.util.List;
     return activity;
   }
 
+  private FlutterEngineGroup.Options addEntrypointOptions(FlutterEngineGroup.Options options) {
+    String appBundlePathOverride = host.getAppBundlePath();
+    if (appBundlePathOverride == null || appBundlePathOverride.isEmpty()) {
+      appBundlePathOverride = FlutterInjector.instance().flutterLoader().findAppBundlePath();
+    }
+
+    DartExecutor.DartEntrypoint dartEntrypoint =
+        new DartExecutor.DartEntrypoint(
+            appBundlePathOverride, host.getDartEntrypointFunctionName());
+    String initialRoute = host.getInitialRoute();
+    if (initialRoute == null) {
+      initialRoute = maybeGetInitialRouteFromIntent(host.getActivity().getIntent());
+      if (initialRoute == null) {
+        initialRoute = DEFAULT_INITIAL_ROUTE;
+      }
+    }
+    return options
+        .setDartEntrypoint(dartEntrypoint)
+        .setInitialRoute(initialRoute)
+        .setDartEntrypointArgs(host.getDartEntrypointArgs());
+  }
+
   /**
    * Obtains a reference to a FlutterEngine to back this delegate and its {@code host}.
    *
@@ -229,6 +259,10 @@ import java.util.List;
    *
    * <p>Second, the {@code host} is given an opportunity to provide a {@link
    * io.flutter.embedding.engine.FlutterEngine} via {@link Host#provideFlutterEngine(Context)}.
+   *
+   * <p>Third, the {@code host} is asked if it would like to use a cached {@link
+   * io.flutter.embedding.engine.FlutterEngineGroup} to create a new {@link FlutterEngine} by {@link
+   * FlutterEngineGroup#createAndRunEngine}
    *
    * <p>If the {@code host} does not provide a {@link io.flutter.embedding.engine.FlutterEngine},
    * then a new {@link FlutterEngine} is instantiated.
@@ -258,18 +292,43 @@ import java.util.List;
       return;
     }
 
+    // Third, check if the host wants to use a cached FlutterEngineGroup
+    // and create new FlutterEngine using FlutterEngineGroup#createAndRunEngine
+    String cachedEngineGroupId = host.getCachedEngineGroupId();
+    if (cachedEngineGroupId != null) {
+      FlutterEngineGroup flutterEngineGroup =
+          FlutterEngineGroupCache.getInstance().get(cachedEngineGroupId);
+      if (flutterEngineGroup == null) {
+        throw new IllegalStateException(
+            "The requested cached FlutterEngineGroup did not exist in the FlutterEngineGroupCache: '"
+                + cachedEngineGroupId
+                + "'");
+      }
+
+      flutterEngine =
+          flutterEngineGroup.createAndRunEngine(
+              addEntrypointOptions(new FlutterEngineGroup.Options(host.getContext())));
+      isFlutterEngineFromHost = false;
+      return;
+    }
+
     // Our host did not provide a custom FlutterEngine. Create a FlutterEngine to back our
     // FlutterView.
     Log.v(
         TAG,
         "No preferred FlutterEngine was provided. Creating a new FlutterEngine for"
             + " this FlutterFragment.");
+
+    FlutterEngineGroup group =
+        engineGroup == null
+            ? new FlutterEngineGroup(host.getContext(), host.getFlutterShellArgs().toArray())
+            : engineGroup;
     flutterEngine =
-        new FlutterEngine(
-            host.getContext(),
-            host.getFlutterShellArgs().toArray(),
-            /*automaticallyRegisterPlugins=*/ false,
-            /*willProvideRestorationData=*/ host.shouldRestoreAndSaveState());
+        group.createAndRunEngine(
+            addEntrypointOptions(
+                new FlutterEngineGroup.Options(host.getContext())
+                    .setAutomaticallyRegisterPlugins(false)
+                    .setWaitForRestorationData(host.shouldRestoreAndSaveState())));
     isFlutterEngineFromHost = false;
   }
 
@@ -466,16 +525,7 @@ import java.util.List;
     if (host.shouldHandleDeeplinking()) {
       Uri data = intent.getData();
       if (data != null) {
-        String fullRoute = data.getPath();
-        if (fullRoute != null && !fullRoute.isEmpty()) {
-          if (data.getQuery() != null && !data.getQuery().isEmpty()) {
-            fullRoute += "?" + data.getQuery();
-          }
-          if (data.getFragment() != null && !data.getFragment().isEmpty()) {
-            fullRoute += "#" + data.getFragment();
-          }
-          return fullRoute;
-        }
+        return data.toString();
       }
     }
     return null;
@@ -522,7 +572,7 @@ import java.util.List;
   void onResume() {
     Log.v(TAG, "onResume()");
     ensureAlive();
-    if (host.shouldDispatchAppLifecycleState()) {
+    if (host.shouldDispatchAppLifecycleState() && flutterEngine != null) {
       flutterEngine.getLifecycleChannel().appIsResumed();
     }
   }
@@ -570,7 +620,7 @@ import java.util.List;
   void onPause() {
     Log.v(TAG, "onPause()");
     ensureAlive();
-    if (host.shouldDispatchAppLifecycleState()) {
+    if (host.shouldDispatchAppLifecycleState() && flutterEngine != null) {
       flutterEngine.getLifecycleChannel().appIsInactive();
     }
   }
@@ -593,7 +643,7 @@ import java.util.List;
     Log.v(TAG, "onStop()");
     ensureAlive();
 
-    if (host.shouldDispatchAppLifecycleState()) {
+    if (host.shouldDispatchAppLifecycleState() && flutterEngine != null) {
       flutterEngine.getLifecycleChannel().appIsPaused();
     }
 
@@ -619,8 +669,13 @@ import java.util.List;
       flutterView.getViewTreeObserver().removeOnPreDrawListener(activePreDrawListener);
       activePreDrawListener = null;
     }
-    flutterView.detachFromFlutterEngine();
-    flutterView.removeOnFirstFrameRenderedListener(flutterUiDisplayListener);
+
+    // flutterView can be null in instances where a delegate.onDestroyView is called without
+    // onCreateView being called. See https://github.com/flutter/engine/pull/41082 for more detail.
+    if (flutterView != null) {
+      flutterView.detachFromFlutterEngine();
+      flutterView.removeOnFirstFrameRenderedListener(flutterUiDisplayListener);
+    }
   }
 
   void onSaveInstanceState(@Nullable Bundle bundle) {
@@ -699,7 +754,7 @@ import java.util.List;
       platformPlugin = null;
     }
 
-    if (host.shouldDispatchAppLifecycleState()) {
+    if (host.shouldDispatchAppLifecycleState() && flutterEngine != null) {
       flutterEngine.getLifecycleChannel().appIsDetached();
     }
 
@@ -777,11 +832,13 @@ import java.util.List;
   void onNewIntent(@NonNull Intent intent) {
     ensureAlive();
     if (flutterEngine != null) {
-      Log.v(TAG, "Forwarding onNewIntent() to FlutterEngine and sending pushRoute message.");
+      Log.v(
+          TAG,
+          "Forwarding onNewIntent() to FlutterEngine and sending pushRouteInformation message.");
       flutterEngine.getActivityControlSurface().onNewIntent(intent);
       String initialRoute = maybeGetInitialRouteFromIntent(intent);
       if (initialRoute != null && !initialRoute.isEmpty()) {
-        flutterEngine.getNavigationChannel().pushRoute(initialRoute);
+        flutterEngine.getNavigationChannel().pushRouteInformation(initialRoute);
       }
     } else {
       Log.w(TAG, "onNewIntent() invoked before FlutterFragment was attached to an Activity.");
@@ -829,6 +886,27 @@ import java.util.List;
       flutterEngine.getActivityControlSurface().onUserLeaveHint();
     } else {
       Log.w(TAG, "onUserLeaveHint() invoked before FlutterFragment was attached to an Activity.");
+    }
+  }
+
+  /**
+   * Invoke this from {@code Activity#onWindowFocusChanged()}.
+   *
+   * <p>A {@code Fragment} host must have its containing {@code Activity} forward this call so that
+   * the {@code Fragment} can then invoke this method.
+   */
+  void onWindowFocusChanged(boolean hasFocus) {
+    ensureAlive();
+    Log.v(TAG, "Received onWindowFocusChanged: " + (hasFocus ? "true" : "false"));
+    if (host.shouldDispatchAppLifecycleState() && flutterEngine != null) {
+      // TODO(gspencergoog): Once we have support for multiple windows/views,
+      // this code will need to consult the list of windows/views to determine if
+      // any windows in the app are focused and call the appropriate function.
+      if (hasFocus) {
+        flutterEngine.getLifecycleChannel().aWindowIsFocused();
+      } else {
+        flutterEngine.getLifecycleChannel().noWindowsAreFocused();
+      }
     }
   }
 
@@ -914,6 +992,9 @@ import java.util.List;
      */
     @Nullable
     String getCachedEngineId();
+
+    @Nullable
+    String getCachedEngineGroupId();
 
     /**
      * Returns true if the {@link io.flutter.embedding.engine.FlutterEngine} used in this delegate

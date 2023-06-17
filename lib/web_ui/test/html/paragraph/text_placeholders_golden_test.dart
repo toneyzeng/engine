@@ -6,27 +6,23 @@ import 'package:test/bootstrap/browser.dart';
 import 'package:ui/src/engine.dart';
 import 'package:ui/ui.dart';
 
-import '../screenshot.dart';
+import '../../common/test_initialization.dart';
+import 'helper.dart';
 import 'text_scuba.dart';
-
-typedef PaintTest = void Function(RecordingCanvas recordingCanvas);
 
 void main() {
   internalBootstrapBrowserTest(() => testMain);
 }
-
-/// Whether we are running on iOS Safari.
-// TODO(mdebbar): https://github.com/flutter/flutter/issues/66656
-bool get isIosSafari => browserEngine == BrowserEngine.webkit &&
-          operatingSystem == OperatingSystem.iOs;
 
 Future<void> testMain() async {
   final EngineScubaTester scuba = await EngineScubaTester.initialize(
     viewportSize: const Size(600, 600),
   );
 
-
-  setUpStableTestFonts();
+  setUpUnitTests(
+    emulateTesterEnvironment: false,
+    setUpTestViewDimensions: false,
+  );
 
   testEachCanvas('draws paragraphs with placeholders', (EngineCanvas canvas) {
     const Rect screenRect = Rect.fromLTWH(0, 0, 600, 600);
@@ -46,9 +42,7 @@ Future<void> testMain() async {
     }
     recordingCanvas.endRecording();
     recordingCanvas.apply(canvas, screenRect);
-    if (!isIosSafari) {
-      return scuba.diffCanvasScreenshot(canvas, 'text_with_placeholders');
-    }
+    return scuba.diffCanvasScreenshot(canvas, 'text_with_placeholders');
   });
 
   testEachCanvas('text alignment and placeholders', (EngineCanvas canvas) {
@@ -84,10 +78,6 @@ Future<void> testMain() async {
     return scuba.diffCanvasScreenshot(canvas, 'text_align_with_placeholders');
   });
 }
-
-const Color black = Color(0xFF000000);
-const Color blue = Color(0xFF0000FF);
-const Color red = Color(0xFFFF0000);
 
 const Size placeholderSize = Size(80.0, 50.0);
 

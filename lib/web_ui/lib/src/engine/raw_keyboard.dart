@@ -6,21 +6,21 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import '../engine.dart'  show registerHotRestartListener;
+import 'browser_detection.dart';
 import 'dom.dart';
 import 'keyboard_binding.dart';
 import 'platform_dispatcher.dart';
-import 'safe_browser_api.dart';
 import 'services.dart';
 
 /// Provides keyboard bindings, such as the `flutter/keyevent` channel.
 class RawKeyboard {
   RawKeyboard._(this._onMacOs) {
-    _keydownListener = allowInterop((DomEvent event) {
+    _keydownListener = createDomEventListener((DomEvent event) {
       _handleHtmlEvent(event);
     });
     domWindow.addEventListener('keydown', _keydownListener);
 
-    _keyupListener = allowInterop((DomEvent event) {
+    _keyupListener = createDomEventListener((DomEvent event) {
       _handleHtmlEvent(event);
     });
     domWindow.addEventListener('keyup', _keyupListener);
@@ -88,6 +88,14 @@ class RawKeyboard {
     return _onMacOs;
   }
 
+  bool _shouldIgnore(FlutterHtmlKeyboardEvent event) {
+    // During IME composition, Tab fires twice (once for composition and once
+    // for regular tabbing behavior), which causes issues. Intercepting the
+    // tab keydown event during composition prevents these issues from occurring.
+    // https://developer.mozilla.org/en-US/docs/Web/API/Element/keydown_event#ignoring_keydown_during_ime_composition
+    return event.type == 'keydown' && event.key == 'Tab' && event.isComposing;
+  }
+
   void _handleHtmlEvent(DomEvent domEvent) {
     if (!domInstanceOfString(domEvent, 'KeyboardEvent')) {
       return;
@@ -95,6 +103,10 @@ class RawKeyboard {
 
     final FlutterHtmlKeyboardEvent event = FlutterHtmlKeyboardEvent(domEvent as DomKeyboardEvent);
     final String timerKey = event.code!;
+
+    if (_shouldIgnore(event)) {
+      return;
+    }
 
     // Don't handle synthesizing a keyup event for modifier keys
     if (!_isModifierKey(event) && _shouldDoKeyGuard()) {
@@ -122,6 +134,9 @@ class RawKeyboard {
         _lastMetaState |= modifierNumLock;
       } else if (event.key == 'ScrollLock') {
         _lastMetaState |= modifierScrollLock;
+      } else if (event.key == 'Meta' && operatingSystem == OperatingSystem.linux) {
+        // On Chrome Linux, metaState can be wrong when a Meta key is pressed.
+        _lastMetaState |= _modifierMeta;
       }
     }
     final Map<String, dynamic> eventData = <String, dynamic>{

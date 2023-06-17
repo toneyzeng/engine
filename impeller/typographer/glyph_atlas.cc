@@ -4,7 +4,46 @@
 
 #include "impeller/typographer/glyph_atlas.h"
 
+#include <utility>
+
 namespace impeller {
+
+GlyphAtlasContext::GlyphAtlasContext()
+    : atlas_(std::make_shared<GlyphAtlas>(GlyphAtlas::Type::kAlphaBitmap)),
+      atlas_size_(ISize(0, 0)) {}
+
+GlyphAtlasContext::~GlyphAtlasContext() {}
+
+std::shared_ptr<GlyphAtlas> GlyphAtlasContext::GetGlyphAtlas() const {
+  return atlas_;
+}
+
+const ISize& GlyphAtlasContext::GetAtlasSize() const {
+  return atlas_size_;
+}
+
+std::shared_ptr<SkBitmap> GlyphAtlasContext::GetBitmap() const {
+  return bitmap_;
+}
+
+std::shared_ptr<RectanglePacker> GlyphAtlasContext::GetRectPacker() const {
+  return rect_packer_;
+}
+
+void GlyphAtlasContext::UpdateGlyphAtlas(std::shared_ptr<GlyphAtlas> atlas,
+                                         ISize size) {
+  atlas_ = std::move(atlas);
+  atlas_size_ = size;
+}
+
+void GlyphAtlasContext::UpdateBitmap(std::shared_ptr<SkBitmap> bitmap) {
+  bitmap_ = std::move(bitmap);
+}
+
+void GlyphAtlasContext::UpdateRectPacker(
+    std::shared_ptr<RectanglePacker> rect_packer) {
+  rect_packer_ = std::move(rect_packer);
+}
 
 GlyphAtlas::GlyphAtlas(Type type) : type_(type) {}
 
@@ -31,9 +70,9 @@ void GlyphAtlas::AddTypefaceGlyphPosition(const FontGlyphPair& pair,
   positions_[pair] = rect;
 }
 
-std::optional<Rect> GlyphAtlas::FindFontGlyphPosition(
+std::optional<Rect> GlyphAtlas::FindFontGlyphBounds(
     const FontGlyphPair& pair) const {
-  auto found = positions_.find(pair);
+  const auto& found = positions_.find(pair);
   if (found == positions_.end()) {
     return std::nullopt;
   }

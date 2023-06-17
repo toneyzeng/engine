@@ -8,16 +8,13 @@ import '../dom.dart';
 import '../embedder.dart';
 import '../html/bitmap_canvas.dart';
 import '../profiler.dart';
-import '../util.dart';
 import 'layout_fragmenter.dart';
 import 'layout_service.dart';
 import 'paint_service.dart';
 import 'paragraph.dart';
 import 'word_breaker.dart';
 
-const ui.Color _defaultTextColor = ui.Color(0xFFFF0000);
-
-final String _placeholderChar = String.fromCharCode(0xFFFC);
+final String placeholderChar = String.fromCharCode(0xFFFC);
 
 /// A paragraph made up of a flat list of text spans and placeholders.
 ///
@@ -33,7 +30,6 @@ class CanvasParagraph implements ui.Paragraph {
     this.spans, {
     required this.paragraphStyle,
     required this.plainText,
-    required this.placeholderCount,
     required this.canDrawOnCanvas,
   }) : assert(spans.isNotEmpty);
 
@@ -45,9 +41,6 @@ class CanvasParagraph implements ui.Paragraph {
 
   /// The full textual content of the paragraph.
   late String plainText;
-
-  /// The number of placeholders in this paragraph.
-  final int placeholderCount;
 
   /// Whether this paragraph can be drawn on a bitmap canvas.
   ///
@@ -86,8 +79,6 @@ class CanvasParagraph implements ui.Paragraph {
 
   /// Whether this paragraph has been laid out or not.
   bool isLaidOut = false;
-
-  bool get isRtl => paragraphStyle.effectiveTextDirection == ui.TextDirection.rtl;
 
   ui.ParagraphConstraints? _lastUsedConstraints;
 
@@ -138,27 +129,23 @@ class CanvasParagraph implements ui.Paragraph {
     _paintService.paint(canvas, offset);
   }
 
-  /// Generates a flat string computed from all the spans of the paragraph.
-  String toPlainText() => plainText;
-
-  DomHTMLElement? _cachedDomElement;
+  DomElement? _cachedDomElement;
 
   /// Returns a DOM element that represents the entire paragraph and its
   /// children.
   ///
   /// Generates a new DOM element on every invocation.
-  DomHTMLElement toDomElement() {
+  DomElement toDomElement() {
     assert(isLaidOut);
-    final DomHTMLElement? domElement = _cachedDomElement;
+    final DomElement? domElement = _cachedDomElement;
     if (domElement == null) {
       return _cachedDomElement ??= _createDomElement();
     }
-    return domElement.cloneNode(true) as DomHTMLElement;
+    return domElement.cloneNode(true) as DomElement;
   }
 
-  DomHTMLElement _createDomElement() {
-    final DomHTMLElement rootElement =
-        domDocument.createElement('flt-paragraph') as DomHTMLElement;
+  DomElement _createDomElement() {
+    final DomElement rootElement = domDocument.createElement('flt-paragraph');
 
     // 1. Set paragraph-level styles.
 
@@ -183,12 +170,11 @@ class CanvasParagraph implements ui.Paragraph {
           continue;
         }
 
-        final DomHTMLElement spanElement = domDocument.createElement('flt-span') as DomHTMLElement;
-        applyTextStyleToElement(
-          element: spanElement,
-          style: fragment.style,
-          isSpan: true,
-        );
+        final DomElement spanElement = domDocument.createElement('flt-span');
+        if (fragment.textDirection == ui.TextDirection.rtl) {
+          spanElement.setAttribute('dir', 'rtl');
+        }
+        applyTextStyleToElement(element: spanElement, style: fragment.style);
         _positionSpanElement(spanElement, line, fragment);
 
         spanElement.appendText(text);
@@ -221,18 +207,15 @@ class CanvasParagraph implements ui.Paragraph {
 
   @override
   ui.TextRange getWordBoundary(ui.TextPosition position) {
-    final String text = toPlainText();
     final int characterPosition;
     switch (position.affinity) {
       case ui.TextAffinity.upstream:
         characterPosition = position.offset - 1;
-        break;
       case ui.TextAffinity.downstream:
         characterPosition = position.offset;
-        break;
     }
-    final int start = WordBreaker.prevBreakIndex(text, characterPosition + 1);
-    final int end = WordBreaker.nextBreakIndex(text, characterPosition);
+    final int start = WordBreaker.prevBreakIndex(plainText, characterPosition + 1);
+    final int end = WordBreaker.nextBreakIndex(plainText, characterPosition);
     return ui.TextRange(start: start, end: end);
   }
 
@@ -249,7 +232,7 @@ class CanvasParagraph implements ui.Paragraph {
     }
 
     final ParagraphLine line = lines[i];
-    return ui.TextRange(start: line.startIndex, end: line.endIndex);
+    return ui.TextRange(start: line.startIndex, end: line.endIndex - line.trailingNewlines);
   }
 
   @override
@@ -269,9 +252,16 @@ class CanvasParagraph implements ui.Paragraph {
 
   @override
   bool get debugDisposed {
-    if (assertionsEnabled) {
-      return _disposed;
+    bool? result;
+    assert(() {
+      result = _disposed;
+      return true;
+    }());
+
+    if (result != null) {
+      return result!;
     }
+
     throw StateError('Paragraph.debugDisposed is only avialalbe when asserts are enabled.');
   }
 }
@@ -288,51 +278,30 @@ void _positionSpanElement(DomElement element, ParagraphLine line, LayoutFragment
     ..lineHeight = '${boxRect.height}px';
 }
 
-/// A common interface for all types of spans that make up a paragraph.
-///
-/// These spans are stored as a flat list in the paragraph object.
-abstract class ParagraphSpan {
-  /// The index of the beginning of the range of text represented by this span.
-  int get start;
-
-  /// The index of the end of the range of text represented by this span.
-  int get end;
-
-  /// The resolved style of the span.
-  EngineTextStyle get style;
-}
-
-/// Represent a span of text in the paragraph.
-///
-/// It's a "flat" text span as opposed to the framework text spans that are
-/// hierarchical.
+/// Represents a span in the paragraph.
 ///
 /// Instead of keeping spans and styles in a tree hierarchy like the framework
 /// does, we flatten the structure and resolve/merge all the styles from parent
 /// nodes.
-class FlatTextSpan implements ParagraphSpan {
-  /// Creates a [FlatTextSpan] with the given [style], representing the span of
+///
+/// These spans are stored as a flat list in the paragraph object.
+class ParagraphSpan {
+  /// Creates a [ParagraphSpan] with the given [style], representing the span of
   /// text in the range between [start] and [end].
-  FlatTextSpan({
+  ParagraphSpan({
     required this.style,
     required this.start,
     required this.end,
   });
 
-  @override
+  /// The resolved style of the span.
   final EngineTextStyle style;
 
-  @override
+  /// The index of the beginning of the range of text represented by this span.
   final int start;
 
-  @override
+  /// The index of the end of the range of text represented by this span.
   final int end;
-
-  String textOf(CanvasParagraph paragraph) {
-    final String text = paragraph.toPlainText();
-    assert(end <= text.length);
-    return text.substring(start, end);
-  }
 }
 
 class PlaceholderSpan extends ParagraphPlaceholder implements ParagraphSpan {
@@ -526,7 +495,7 @@ class RootStyleNode extends StyleNode {
   final EngineParagraphStyle paragraphStyle;
 
   @override
-  final ui.Color _color = _defaultTextColor;
+  ui.Color? get _color => null;
 
   @override
   ui.TextDecoration? get _decoration => null;
@@ -622,16 +591,13 @@ class CanvasParagraphBuilder implements ui.ParagraphBuilder {
     double? baselineOffset,
     ui.TextBaseline? baseline,
   }) {
-    // TODO(mdebbar): for measurement of placeholders, look at:
-    // - https://github.com/flutter/engine/blob/c0f7e8acf9318d264ad6a235facd097de597ffcc/third_party/txt/src/txt/paragraph_txt.cc#L325-L350
-
     // Require a baseline to be specified if using a baseline-based alignment.
     assert(!(alignment == ui.PlaceholderAlignment.aboveBaseline ||
             alignment == ui.PlaceholderAlignment.belowBaseline ||
             alignment == ui.PlaceholderAlignment.baseline) || baseline != null);
 
     final int start = _plainTextBuffer.length;
-    _plainTextBuffer.write(_placeholderChar);
+    _plainTextBuffer.write(placeholderChar);
     final int end = _plainTextBuffer.length;
 
     final EngineTextStyle style = _currentStyleNode.resolveStyle();
@@ -674,7 +640,7 @@ class CanvasParagraphBuilder implements ui.ParagraphBuilder {
     final EngineTextStyle style = _currentStyleNode.resolveStyle();
     _updateCanDrawOnCanvas(style);
 
-    _spans.add(FlatTextSpan(style: style, start: start, end: end));
+    _spans.add(ParagraphSpan(style: style, start: start, end: end));
   }
 
   void _updateCanDrawOnCanvas(EngineTextStyle style) {
@@ -708,18 +674,15 @@ class CanvasParagraphBuilder implements ui.ParagraphBuilder {
       //
       // We want the paragraph to always have a non-empty list of spans to match
       // the expectations of the [LayoutFragmenter].
-      _spans.add(FlatTextSpan(
-        style: _rootStyleNode.resolveStyle(),
-        start: 0,
-        end: 0,
-      ));
+      _spans.add(
+        ParagraphSpan(style: _rootStyleNode.resolveStyle(), start: 0, end: 0),
+      );
     }
 
     return CanvasParagraph(
       _spans,
       paragraphStyle: _paragraphStyle,
       plainText: _plainTextBuffer.toString(),
-      placeholderCount: _placeholderCount,
       canDrawOnCanvas: _canDrawOnCanvas,
     );
   }

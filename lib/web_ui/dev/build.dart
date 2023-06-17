@@ -3,15 +3,24 @@
 // found in the LICENSE file.
 
 import 'dart:async';
-import 'dart:io' show Directory, Platform;
 
 import 'package:args/command_runner.dart';
 import 'package:path/path.dart' as path;
 import 'package:watcher/src/watch_event.dart';
 
 import 'environment.dart';
+import 'exceptions.dart';
 import 'pipeline.dart';
 import 'utils.dart';
+
+const Map<String, String> targetAliases = <String, String>{
+  'sdk': 'flutter/web_sdk',
+  'web_sdk': 'flutter/web_sdk',
+  'canvaskit': 'flutter/third_party/canvaskit:canvaskit_group',
+  'canvaskit_chromium': 'flutter/third_party/canvaskit:canvaskit_chromium_group',
+  'skwasm': 'flutter/third_party/canvaskit:skwasm_group',
+  'archive': 'flutter/web_sdk:flutter_web_sdk_archive',
+};
 
 class BuildCommand extends Command<bool> with ArgUtils<bool> {
   BuildCommand() {
@@ -22,9 +31,26 @@ class BuildCommand extends Command<bool> with ArgUtils<bool> {
           'made. Disabled by default.',
     );
     argParser.addFlag(
-      'build-canvaskit',
-      help: 'Build CanvasKit locally instead of getting it from CIPD. Disabled '
-          'by default.',
+      'host',
+      help: 'Build the host build instead of the wasm build, which is '
+          'currently needed for `flutter run --local-engine` to work.'
+    );
+    argParser.addFlag(
+      'profile',
+      help: 'Build in profile mode instead of release mode. In this mode, the '
+          'output will be located at "out/wasm_profile".\nThis only applies to '
+          'the wasm build. The host build is always built in release mode.',
+    );
+    argParser.addFlag(
+      'debug',
+      help: 'Build in debug mode instead of release mode. In this mode, the '
+          'output will be located at "out/wasm_debug".\nThis only applies to '
+          'the wasm build. The host build is always built in release mode.',
+    );
+    argParser.addFlag(
+      'dwarf',
+      help: 'Embed DWARF debugging info into the output wasm modules. This is '
+          'only valid in debug mode.',
     );
   }
 
@@ -36,21 +62,29 @@ class BuildCommand extends Command<bool> with ArgUtils<bool> {
 
   bool get isWatchMode => boolArg('watch');
 
-  bool get buildCanvasKit => boolArg('build-canvaskit');
+  bool get host => boolArg('host');
+
+  List<String> get targets => argResults?.rest ?? <String>[];
+  bool get embedDwarf => boolArg('dwarf');
 
   @override
   FutureOr<bool> run() async {
+    if (embedDwarf && runtimeMode != RuntimeMode.debug) {
+      throw ToolExit('Embedding DWARF data requires debug runtime mode.');
+    }
     final FilePath libPath = FilePath.fromWebUi('lib');
     final List<PipelineStep> steps = <PipelineStep>[
-      GnPipelineStep(),
-      NinjaPipelineStep(target: environment.engineBuildDir),
+      GnPipelineStep(
+        host: host,
+        runtimeMode: runtimeMode,
+        embedDwarf: embedDwarf,
+      ),
+      NinjaPipelineStep(
+        host: host,
+        runtimeMode: runtimeMode,
+        targets: targets.map((String target) => targetAliases[target] ?? target),
+      ),
     ];
-    if (buildCanvasKit) {
-      steps.addAll(<PipelineStep>[
-        GnPipelineStep(target: 'canvaskit'),
-        NinjaPipelineStep(target: environment.wasmReleaseOutDir),
-      ]);
-    }
     final Pipeline buildPipeline = Pipeline(steps: steps);
     await buildPipeline.run();
 
@@ -73,8 +107,15 @@ class BuildCommand extends Command<bool> with ArgUtils<bool> {
 /// Not safe to interrupt as it may leave the `out/` directory in a corrupted
 /// state. GN is pretty quick though, so it's OK to not support interruption.
 class GnPipelineStep extends ProcessStep {
-  GnPipelineStep({this.target = 'engine'})
-      : assert(target == 'engine' || target == 'canvaskit');
+  GnPipelineStep({
+    required this.host,
+    required this.runtimeMode,
+    required this.embedDwarf,
+  });
+
+  final bool host;
+  final RuntimeMode runtimeMode;
+  final bool embedDwarf;
 
   @override
   String get description => 'gn';
@@ -82,33 +123,30 @@ class GnPipelineStep extends ProcessStep {
   @override
   bool get isSafeToInterrupt => false;
 
-  /// The target to build with gn.
-  ///
-  /// Acceptable values: engine, canvaskit
-  final String target;
+  List<String> get _gnArgs {
+    if (host) {
+      return <String>[
+        '--unoptimized',
+        '--full-dart-sdk',
+      ];
+    } else {
+      return <String>[
+        '--web',
+        '--runtime-mode=${runtimeMode.name}',
+        if (runtimeMode == RuntimeMode.debug)
+          '--unoptimized',
+        if (embedDwarf)
+          '--wasm-use-dwarf',
+      ];
+    }
+  }
 
   @override
   Future<ProcessManager> createProcess() {
-    print('Running gn for $target...');
-    final List<String> gnArgs = <String>[];
-    if (target == 'engine') {
-      gnArgs.addAll(<String>[
-        '--unopt',
-        if (Platform.isMacOS) '--xcode-symlinks',
-        '--full-dart-sdk',
-        if (environment.isMacosArm) '--mac-cpu=arm64',
-      ]);
-    } else if (target == 'canvaskit') {
-      gnArgs.addAll(<String>[
-        '--wasm',
-        '--runtime-mode=release',
-      ]);
-    } else {
-      throw StateError('Target was not engine or canvaskit: $target');
-    }
+    print('Running gn...');
     return startProcess(
       path.join(environment.flutterDirectory.path, 'tools', 'gn'),
-      gnArgs,
+      _gnArgs,
     );
   }
 }
@@ -117,7 +155,11 @@ class GnPipelineStep extends ProcessStep {
 ///
 /// Can be safely interrupted.
 class NinjaPipelineStep extends ProcessStep {
-  NinjaPipelineStep({required this.target});
+  NinjaPipelineStep({
+    required this.host,
+    required this.runtimeMode,
+    required this.targets,
+  });
 
   @override
   String get description => 'ninja';
@@ -125,8 +167,16 @@ class NinjaPipelineStep extends ProcessStep {
   @override
   bool get isSafeToInterrupt => true;
 
-  /// The target directory to build.
-  final Directory target;
+  final bool host;
+  final Iterable<String> targets;
+  final RuntimeMode runtimeMode;
+
+  String get buildDirectory {
+    if (host) {
+      return environment.hostDebugUnoptDir.path;
+    }
+    return getBuildDirectoryForRuntimeMode(runtimeMode).path;
+  }
 
   @override
   Future<ProcessManager> createProcess() {
@@ -135,7 +185,8 @@ class NinjaPipelineStep extends ProcessStep {
       'autoninja',
       <String>[
         '-C',
-        target.path,
+        buildDirectory,
+        ...targets,
       ],
     );
   }

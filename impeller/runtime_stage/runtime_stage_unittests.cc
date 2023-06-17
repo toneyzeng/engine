@@ -9,11 +9,11 @@
 #include "flutter/testing/testing.h"
 #include "impeller/base/allocation.h"
 #include "impeller/base/validation.h"
+#include "impeller/core/shader_types.h"
 #include "impeller/playground/playground.h"
 #include "impeller/renderer/pipeline_descriptor.h"
 #include "impeller/renderer/pipeline_library.h"
 #include "impeller/renderer/shader_library.h"
-#include "impeller/renderer/shader_types.h"
 #include "impeller/runtime_stage/runtime_stage.h"
 #include "impeller/runtime_stage/runtime_stage_playground.h"
 
@@ -43,7 +43,7 @@ TEST(RuntimeStageTest, CanRejectInvalidBlob) {
   // Not meant to be secure. Just reject obviously bad blobs using magic
   // numbers.
   ::memset(junk_allocation->GetBuffer(), 127, junk_allocation->GetLength());
-  RuntimeStage stage(CreateMappingFromAllocation(std::move(junk_allocation)));
+  RuntimeStage stage(CreateMappingFromAllocation(junk_allocation));
   ASSERT_FALSE(stage.IsValid());
 }
 
@@ -207,16 +207,27 @@ TEST_P(RuntimeStageTest, CanRegisterStage) {
         reg.set_value(result);
       }));
   ASSERT_TRUE(future.get());
-  auto function =
-      library->GetFunction(stage.GetEntrypoint(), ShaderStage::kFragment);
-  ASSERT_NE(function, nullptr);
+  {
+    auto function =
+        library->GetFunction(stage.GetEntrypoint(), ShaderStage::kFragment);
+    ASSERT_NE(function, nullptr);
+  }
+
+  // Check if unregistering works.
+
+  library->UnregisterFunction(stage.GetEntrypoint(), ShaderStage::kFragment);
+  {
+    auto function =
+        library->GetFunction(stage.GetEntrypoint(), ShaderStage::kFragment);
+    ASSERT_EQ(function, nullptr);
+  }
 }
 
 TEST_P(RuntimeStageTest, CanCreatePipelineFromRuntimeStage) {
   if (GetParam() != PlaygroundBackend::kMetal) {
     GTEST_SKIP_("Skipped: https://github.com/flutter/flutter/issues/105538");
   }
-  auto stage = CreateStageFromFixture("ink_sparkle.frag.iplr");
+  auto stage = OpenAssetAsRuntimeStage("ink_sparkle.frag.iplr");
   ASSERT_NE(stage, nullptr);
   ASSERT_TRUE(RegisterStage(*stage));
   auto library = GetContext()->GetShaderLibrary();
@@ -228,17 +239,20 @@ TEST_P(RuntimeStageTest, CanCreatePipelineFromRuntimeStage) {
   desc.AddStageEntrypoint(
       library->GetFunction(stage->GetEntrypoint(), ShaderStage::kFragment));
   auto vertex_descriptor = std::make_shared<VertexDescriptor>();
-  ASSERT_TRUE(vertex_descriptor->SetStageInputs(VS::kAllShaderStageInputs));
+  vertex_descriptor->SetStageInputs(VS::kAllShaderStageInputs,
+                                    VS::kInterleavedBufferLayout);
+
   desc.SetVertexDescriptor(std::move(vertex_descriptor));
   ColorAttachmentDescriptor color0;
-  color0.format = PixelFormat::kDefaultColor;
+  color0.format = GetContext()->GetCapabilities()->GetDefaultColorFormat();
   StencilAttachmentDescriptor stencil0;
   stencil0.stencil_compare = CompareFunction::kEqual;
   desc.SetColorAttachmentDescriptor(0u, color0);
   desc.SetStencilAttachmentDescriptors(stencil0);
-  desc.SetStencilPixelFormat(PixelFormat::kDefaultStencil);
-  auto pipeline =
-      GetContext()->GetPipelineLibrary()->GetPipeline(std::move(desc)).get();
+  const auto stencil_fmt =
+      GetContext()->GetCapabilities()->GetDefaultStencilFormat();
+  desc.SetStencilPixelFormat(stencil_fmt);
+  auto pipeline = GetContext()->GetPipelineLibrary()->GetPipeline(desc).Get();
   ASSERT_NE(pipeline, nullptr);
 }
 

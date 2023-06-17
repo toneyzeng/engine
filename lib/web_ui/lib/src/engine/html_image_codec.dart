@@ -10,7 +10,6 @@ import 'package:ui/ui.dart' as ui;
 import 'browser_detection.dart';
 import 'dom.dart';
 import 'safe_browser_api.dart';
-import 'util.dart';
 
 Object? get _jsImageDecodeFunction => getJsProperty<Object?>(
   getJsProperty<Object>(
@@ -53,8 +52,8 @@ class HtmlCodec implements ui.Codec {
       // ignore: unawaited_futures
       imgElement.decode().then((dynamic _) {
         chunkCallback?.call(100, 100);
-        int naturalWidth = imgElement.naturalWidth;
-        int naturalHeight = imgElement.naturalHeight;
+        int naturalWidth = imgElement.naturalWidth.toInt();
+        int naturalHeight = imgElement.naturalHeight.toInt();
         // Workaround for https://bugzilla.mozilla.org/show_bug.cgi?id=700533.
         if (naturalWidth == 0 && naturalHeight == 0 && browserEngine == BrowserEngine.firefox) {
           const int kDefaultImageSizeFallback = 300;
@@ -87,7 +86,7 @@ class HtmlCodec implements ui.Codec {
     // on the main thread, and may cause dropped framed.
     late DomEventListener errorListener;
     DomEventListener? loadListener;
-    errorListener = allowInterop((DomEvent event) {
+    errorListener = createDomEventListener((DomEvent event) {
       if (loadListener != null) {
         imgElement.removeEventListener('load', loadListener);
       }
@@ -95,7 +94,7 @@ class HtmlCodec implements ui.Codec {
       completer.completeError(event);
     });
     imgElement.addEventListener('error', errorListener);
-    loadListener = allowInterop((DomEvent event) {
+    loadListener = createDomEventListener((DomEvent event) {
       if (chunkCallback != null) {
         chunkCallback!(100, 100);
       }
@@ -103,8 +102,8 @@ class HtmlCodec implements ui.Codec {
       imgElement.removeEventListener('error', errorListener);
       final HtmlImage image = HtmlImage(
         imgElement,
-        imgElement.naturalWidth,
-        imgElement.naturalHeight,
+        imgElement.naturalWidth.toInt(),
+        imgElement.naturalHeight.toInt(),
       );
       completer.complete(SingleFrameInfo(image));
     });
@@ -143,7 +142,7 @@ class HtmlImage implements ui.Image {
   }
 
   final DomHTMLImageElement imgElement;
-  bool _requiresClone = false;
+  bool _didClone = false;
 
   bool _disposed = false;
   @override
@@ -151,17 +150,25 @@ class HtmlImage implements ui.Image {
     ui.Image.onDispose?.call(this);
     // Do nothing. The codec that owns this image should take care of
     // releasing the object url.
-    if (assertionsEnabled) {
+    assert(() {
       _disposed = true;
-    }
+      return true;
+    }());
   }
 
   @override
   bool get debugDisposed {
-    if (assertionsEnabled) {
-      return _disposed;
+    bool? result;
+    assert(() {
+      result = _disposed;
+      return true;
+    }());
+
+    if (result != null) {
+      return result!;
     }
-    return throw StateError('Image.debugDisposed is only available when asserts are enabled.');
+
+    throw StateError('Image.debugDisposed is only available when asserts are enabled.');
   }
 
 
@@ -188,8 +195,8 @@ class HtmlImage implements ui.Image {
       case ui.ImageByteFormat.rawRgba:
       case ui.ImageByteFormat.rawStraightRgba:
         final DomCanvasElement canvas = createDomCanvasElement()
-          ..width = width
-          ..height = height;
+          ..width = width.toDouble()
+          ..height = height.toDouble();
         final DomCanvasRenderingContext2D ctx = canvas.context2D;
         ctx.drawImage(imgElement, 0, 0);
         final DomImageData imageData = ctx.getImageData(0, 0, width, height);
@@ -204,16 +211,15 @@ class HtmlImage implements ui.Image {
     }
   }
 
-  // Returns absolutely positioned actual image element on first call and
-  // clones on subsequent calls.
+  @override
+  ui.ColorSpace get colorSpace => ui.ColorSpace.sRGB;
+
   DomHTMLImageElement cloneImageElement() {
-    if (_requiresClone) {
-      return imgElement.cloneNode(true) as DomHTMLImageElement;
-    } else {
-      _requiresClone = true;
+    if (!_didClone) {
+      _didClone = true;
       imgElement.style.position = 'absolute';
-      return imgElement;
     }
+    return imgElement.cloneNode(true) as DomHTMLImageElement;
   }
 
   @override

@@ -8,8 +8,8 @@
 
 #include "flutter/flow/surface.h"
 #include "flutter/fml/trace_event.h"
-#include "flutter/impeller/display_list/display_list_dispatcher.h"
-#include "flutter/impeller/display_list/display_list_image_impeller.h"
+#include "flutter/impeller/display_list/dl_dispatcher.h"
+#include "flutter/impeller/display_list/dl_image_impeller.h"
 #include "flutter/impeller/geometry/size.h"
 #include "flutter/shell/common/snapshot_controller.h"
 
@@ -31,16 +31,14 @@ sk_sp<DlImage> SnapshotControllerImpeller::MakeRasterSnapshot(
 }
 
 sk_sp<DlImage> SnapshotControllerImpeller::DoMakeRasterSnapshot(
-    sk_sp<DisplayList> display_list,
+    const sk_sp<DisplayList>& display_list,
     SkISize size) {
-  impeller::DisplayListDispatcher dispatcher;
+  TRACE_EVENT0("flutter", __FUNCTION__);
+  impeller::DlDispatcher dispatcher;
   display_list->Dispatch(dispatcher);
   impeller::Picture picture = dispatcher.EndRecordingAsPicture();
-  if (GetDelegate().GetSurface() &&
-      GetDelegate().GetSurface()->GetAiksContext()) {
-    impeller::AiksContext* context =
-        GetDelegate().GetSurface()->GetAiksContext();
-
+  auto context = GetDelegate().GetAiksContext();
+  if (context) {
     auto max_size = context->GetContext()
                         ->GetResourceAllocator()
                         ->GetMaxTextureSizeSupported();
@@ -64,7 +62,8 @@ sk_sp<DlImage> SnapshotControllerImpeller::DoMakeRasterSnapshot(
     std::shared_ptr<impeller::Image> image =
         picture.ToImage(*context, render_target_size);
     if (image) {
-      return impeller::DlImageImpeller::Make(image->GetTexture());
+      return impeller::DlImageImpeller::Make(image->GetTexture(),
+                                             DlImage::OwningContext::kRaster);
     }
   }
 

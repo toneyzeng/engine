@@ -9,8 +9,8 @@
 #include "flutter/fml/macros.h"
 #include "impeller/base/allocation.h"
 #include "impeller/base/backend_cast.h"
+#include "impeller/core/device_buffer.h"
 #include "impeller/renderer/backend/gles/reactor_gles.h"
-#include "impeller/renderer/device_buffer.h"
 
 namespace impeller {
 
@@ -26,6 +26,9 @@ class DeviceBufferGLES final
   ~DeviceBufferGLES() override;
 
   const uint8_t* GetBufferData() const;
+
+  void UpdateBufferData(
+      const std::function<void(uint8_t*, size_t length)>& update_buffer_data);
 
   enum class BindingType {
     kArrayBuffer,

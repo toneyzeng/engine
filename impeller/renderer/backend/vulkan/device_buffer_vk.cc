@@ -9,50 +9,35 @@
 
 namespace impeller {
 
-DeviceBufferAllocationVK::DeviceBufferAllocationVK(
-    const VmaAllocator& allocator,
-    VkBuffer buffer,
-    VmaAllocation allocation,
-    VmaAllocationInfo allocation_info)
-    : allocator_(allocator),
-      buffer_(buffer),
+DeviceBufferVK::DeviceBufferVK(DeviceBufferDescriptor desc,
+                               std::weak_ptr<Context> context,
+                               VmaAllocator allocator,
+                               VmaAllocation allocation,
+                               VmaAllocationInfo info,
+                               vk::Buffer buffer)
+    : DeviceBuffer(desc),
+      context_(std::move(context)),
+      allocator_(allocator),
       allocation_(allocation),
-      allocation_info_(allocation_info) {}
+      info_(info),
+      buffer_(buffer) {}
 
-DeviceBufferAllocationVK::~DeviceBufferAllocationVK() {
+DeviceBufferVK::~DeviceBufferVK() {
   if (buffer_) {
-    // https://github.com/flutter/flutter/issues/112387
-    // This buffer can be freed once the command buffer is disposed.
-    // vmaDestroyBuffer(allocator_, buffer_, allocation_);
+    ::vmaDestroyBuffer(allocator_,
+                       static_cast<decltype(buffer_)::NativeType>(buffer_),
+                       allocation_);
   }
 }
 
-vk::Buffer DeviceBufferAllocationVK::GetBufferHandle() const {
-  return buffer_;
-}
-
-void* DeviceBufferAllocationVK::GetMapping() const {
-  return allocation_info_.pMappedData;
-}
-
-DeviceBufferVK::DeviceBufferVK(
-    DeviceBufferDescriptor desc,
-    ContextVK& context,
-    std::unique_ptr<DeviceBufferAllocationVK> device_allocation)
-    : DeviceBuffer(std::move(desc)),
-      context_(context),
-      device_allocation_(std::move(device_allocation)) {}
-
-DeviceBufferVK::~DeviceBufferVK() = default;
-
 uint8_t* DeviceBufferVK::OnGetContents() const {
-  return reinterpret_cast<uint8_t*>(device_allocation_->GetMapping());
+  return static_cast<uint8_t*>(info_.pMappedData);
 }
 
 bool DeviceBufferVK::OnCopyHostBuffer(const uint8_t* source,
                                       Range source_range,
                                       size_t offset) {
-  auto dest = static_cast<uint8_t*>(device_allocation_->GetMapping());
+  uint8_t* dest = OnGetContents();
 
   if (!dest) {
     return false;
@@ -61,21 +46,32 @@ bool DeviceBufferVK::OnCopyHostBuffer(const uint8_t* source,
   if (source) {
     ::memmove(dest + offset, source + source_range.offset, source_range.length);
   }
+  // See https://github.com/flutter/flutter/issues/128556 . Some devices do not
+  // have support for coherent host memory and require an explicit flush.
+  ::vmaFlushAllocation(allocator_, allocation_, offset, source_range.length);
 
   return true;
 }
 
 bool DeviceBufferVK::SetLabel(const std::string& label) {
-  context_.SetDebugName(device_allocation_->GetBufferHandle(), label);
-  return true;
+  auto context = context_.lock();
+  if (!context || !buffer_) {
+    // The context could have died at this point.
+    return false;
+  }
+
+  ::vmaSetAllocationName(allocator_, allocation_, label.c_str());
+
+  return ContextVK::Cast(*context).SetDebugName(buffer_, label);
 }
 
 bool DeviceBufferVK::SetLabel(const std::string& label, Range range) {
+  // We do not have the ability to name ranges. Just name the whole thing.
   return SetLabel(label);
 }
 
-vk::Buffer DeviceBufferVK::GetVKBufferHandle() const {
-  return device_allocation_->GetBufferHandle();
+vk::Buffer DeviceBufferVK::GetBuffer() const {
+  return buffer_;
 }
 
 }  // namespace impeller

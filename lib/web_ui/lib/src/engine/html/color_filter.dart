@@ -4,15 +4,15 @@
 
 import 'package:ui/ui.dart' as ui;
 
+import '../../engine/color_filter.dart';
 import '../browser_detection.dart';
-import '../canvaskit/color_filter.dart';
-import '../color_filter.dart';
 import '../dom.dart';
 import '../embedder.dart';
 import '../svg.dart';
 import '../util.dart';
 import 'bitmap_canvas.dart';
 import 'path_to_svg_clip.dart';
+import 'shaders/shader.dart';
 import 'surface.dart';
 
 /// A surface that applies an [ColorFilter] to its children.
@@ -73,84 +73,35 @@ class PersistedColorFilter extends PersistedContainerSurface
   void apply() {
     flutterViewEmbedder.removeResource(_filterElement);
     _filterElement = null;
-    final EngineColorFilter? engineValue = filter as EngineColorFilter?;
+    final EngineHtmlColorFilter? engineValue = createHtmlColorFilter(filter as EngineColorFilter);
     if (engineValue == null) {
       rootElement!.style.backgroundColor = '';
       childContainer?.style.visibility = 'visible';
       return;
     }
-    if (engineValue is CkBlendModeColorFilter) {
+
+    if (engineValue is ModeHtmlColorFilter) {
       _applyBlendModeFilter(engineValue);
-    } else if (engineValue is CkMatrixColorFilter) {
+    } else if (engineValue is MatrixHtmlColorFilter) {
       _applyMatrixColorFilter(engineValue);
     } else {
       childContainer?.style.visibility = 'visible';
     }
   }
 
-  void _applyBlendModeFilter(CkBlendModeColorFilter colorFilter) {
-    final ui.Color filterColor = colorFilter.color;
-    ui.BlendMode colorFilterBlendMode = colorFilter.blendMode;
-    final DomCSSStyleDeclaration style = childContainer!.style;
-    switch (colorFilterBlendMode) {
-      case ui.BlendMode.clear:
-      case ui.BlendMode.dstOut:
-      case ui.BlendMode.srcOut:
-        style.visibility = 'hidden';
-        return;
-      case ui.BlendMode.dst:
-      case ui.BlendMode.dstIn:
-        // Noop.
-        return;
-      case ui.BlendMode.src:
-      case ui.BlendMode.srcOver:
-        // Uses source filter color.
-        // Since we don't have a size, we can't use background color.
-        // Use svg filter srcIn instead.
-        colorFilterBlendMode = ui.BlendMode.srcIn;
-        break;
-      case ui.BlendMode.dstOver:
-      case ui.BlendMode.srcIn:
-      case ui.BlendMode.srcATop:
-      case ui.BlendMode.dstATop:
-      case ui.BlendMode.xor:
-      case ui.BlendMode.plus:
-      case ui.BlendMode.modulate:
-      case ui.BlendMode.screen:
-      case ui.BlendMode.overlay:
-      case ui.BlendMode.darken:
-      case ui.BlendMode.lighten:
-      case ui.BlendMode.colorDodge:
-      case ui.BlendMode.colorBurn:
-      case ui.BlendMode.hardLight:
-      case ui.BlendMode.softLight:
-      case ui.BlendMode.difference:
-      case ui.BlendMode.exclusion:
-      case ui.BlendMode.multiply:
-      case ui.BlendMode.hue:
-      case ui.BlendMode.saturation:
-      case ui.BlendMode.color:
-      case ui.BlendMode.luminosity:
-        break;
-    }
+  void _applyBlendModeFilter(ModeHtmlColorFilter colorFilter) {
+    _filterElement = colorFilter.makeSvgFilter(childContainer);
 
-    // Use SVG filter for blend mode.
-    final SvgFilter svgFilter = svgFilterFromBlendMode(filterColor, colorFilterBlendMode);
-    _filterElement = svgFilter.element;
-    flutterViewEmbedder.addResource(_filterElement!);
-    style.filter = 'url(#${svgFilter.id})';
-    if (colorFilterBlendMode == ui.BlendMode.saturation ||
-        colorFilterBlendMode == ui.BlendMode.multiply ||
-        colorFilterBlendMode == ui.BlendMode.modulate) {
-      style.backgroundColor = colorToCssString(filterColor)!;
+    /// Some blendModes do not make an svgFilter. See [EngineHtmlColorFilter.makeSvgFilter()]
+    if (_filterElement == null) {
+      return;
     }
+    childContainer!.style.filter = colorFilter.filterAttribute;
   }
 
-  void _applyMatrixColorFilter(CkMatrixColorFilter colorFilter) {
-    final SvgFilter svgFilter = svgFilterFromColorMatrix(colorFilter.matrix);
-    _filterElement = svgFilter.element;
-    flutterViewEmbedder.addResource(_filterElement!);
-    childContainer!.style.filter = 'url(#${svgFilter.id})';
+  void _applyMatrixColorFilter(MatrixHtmlColorFilter colorFilter) {
+    _filterElement = colorFilter.makeSvgFilter(childContainer);
+    childContainer!.style.filter = colorFilter.filterAttribute;
   }
 
   @override
@@ -170,24 +121,18 @@ SvgFilter svgFilterFromBlendMode(
     case ui.BlendMode.srcIn:
     case ui.BlendMode.srcATop:
       svgFilter = _srcInColorFilterToSvg(filterColor);
-      break;
     case ui.BlendMode.srcOut:
       svgFilter = _srcOutColorFilterToSvg(filterColor);
-      break;
     case ui.BlendMode.dstATop:
       svgFilter = _dstATopColorFilterToSvg(filterColor);
-      break;
     case ui.BlendMode.xor:
       svgFilter = _xorColorFilterToSvg(filterColor);
-      break;
     case ui.BlendMode.plus:
       // Porter duff source + destination.
       svgFilter = _compositeColorFilterToSvg(filterColor, 0, 1, 1, 0);
-      break;
     case ui.BlendMode.modulate:
       // Porter duff source * destination but preserves alpha.
       svgFilter = _modulateColorFilterToSvg(filterColor!);
-      break;
     case ui.BlendMode.overlay:
       // Since overlay is the same as hard-light by swapping layers,
       // pass hard-light blend function.
@@ -196,7 +141,6 @@ SvgFilter svgFilterFromBlendMode(
         blendModeToSvgEnum(ui.BlendMode.hardLight)!,
         swapLayers: true,
       );
-      break;
     // Several of the filters below (although supported) do not render the
     // same (close but not exact) as native flutter when used as blend mode
     // for a background-image with a background color. They only look
@@ -224,7 +168,6 @@ SvgFilter svgFilterFromBlendMode(
     case ui.BlendMode.exclusion:
       svgFilter = _blendColorFilterToSvg(
           filterColor, blendModeToSvgEnum(colorFilterBlendMode)!);
-      break;
     case ui.BlendMode.src:
     case ui.BlendMode.dst:
     case ui.BlendMode.dstIn:
@@ -409,7 +352,7 @@ SvgFilter _srcInColorFilterToSvg(ui.Color? color) {
     result: 'destalpha',
   );
   builder.setFeFlood(
-    floodColor: colorToCssString(color) ?? '',
+    floodColor: color?.toCssString() ?? '',
     floodOpacity: '1',
     result: 'flood',
   );
@@ -431,7 +374,7 @@ SvgFilter _srcInColorFilterToSvg(ui.Color? color) {
 SvgFilter _dstATopColorFilterToSvg(ui.Color? color) {
   final SvgFilterBuilder builder = SvgFilterBuilder();
   builder.setFeFlood(
-    floodColor: colorToCssString(color) ?? '',
+    floodColor: color?.toCssString() ?? '',
     floodOpacity: '1',
     result: 'flood',
   );
@@ -447,7 +390,7 @@ SvgFilter _dstATopColorFilterToSvg(ui.Color? color) {
 SvgFilter _srcOutColorFilterToSvg(ui.Color? color) {
   final SvgFilterBuilder builder = SvgFilterBuilder();
   builder.setFeFlood(
-    floodColor: colorToCssString(color) ?? '',
+    floodColor: color?.toCssString() ?? '',
     floodOpacity: '1',
     result: 'flood',
   );
@@ -463,7 +406,7 @@ SvgFilter _srcOutColorFilterToSvg(ui.Color? color) {
 SvgFilter _xorColorFilterToSvg(ui.Color? color) {
   final SvgFilterBuilder builder = SvgFilterBuilder();
   builder.setFeFlood(
-    floodColor: colorToCssString(color) ?? '',
+    floodColor: color?.toCssString() ?? '',
     floodOpacity: '1',
     result: 'flood',
   );
@@ -482,7 +425,7 @@ SvgFilter _compositeColorFilterToSvg(
     ui.Color? color, double k1, double k2, double k3, double k4) {
   final SvgFilterBuilder builder = SvgFilterBuilder();
   builder.setFeFlood(
-    floodColor: colorToCssString(color) ?? '',
+    floodColor: color?.toCssString() ?? '',
     floodOpacity: '1',
     result: 'flood',
   );
@@ -535,7 +478,7 @@ SvgFilter _blendColorFilterToSvg(ui.Color? color, SvgBlendMode svgBlendMode,
     {bool swapLayers = false}) {
   final SvgFilterBuilder builder = SvgFilterBuilder();
   builder.setFeFlood(
-    floodColor: colorToCssString(color) ?? '',
+    floodColor: color?.toCssString() ?? '',
     floodOpacity: '1',
     result: 'flood',
   );

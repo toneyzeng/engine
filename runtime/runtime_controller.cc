@@ -20,6 +20,8 @@
 
 namespace flutter {
 
+const uint64_t kFlutterDefaultViewId = 0llu;
+
 RuntimeController::RuntimeController(RuntimeDelegate& p_client,
                                      const TaskRunners& task_runners)
     : client_(p_client), vm_(nullptr), context_(task_runners) {}
@@ -119,10 +121,12 @@ bool RuntimeController::FlushRuntimeStateToIsolate() {
          SetAccessibilityFeatures(
              platform_data_.accessibility_feature_flags_) &&
          SetUserSettingsData(platform_data_.user_settings_data) &&
-         SetLifecycleState(platform_data_.lifecycle_state);
+         SetInitialLifecycleState(platform_data_.lifecycle_state) &&
+         SetDisplays(platform_data_.displays);
 }
 
 bool RuntimeController::SetViewportMetrics(const ViewportMetrics& metrics) {
+  TRACE_EVENT0("flutter", "SetViewportMetrics");
   platform_data_.viewport_metrics = metrics;
 
   if (auto* platform_configuration = GetPlatformConfigurationIfAvailable()) {
@@ -157,11 +161,11 @@ bool RuntimeController::SetUserSettingsData(const std::string& data) {
   return false;
 }
 
-bool RuntimeController::SetLifecycleState(const std::string& data) {
+bool RuntimeController::SetInitialLifecycleState(const std::string& data) {
   platform_data_.lifecycle_state = data;
 
   if (auto* platform_configuration = GetPlatformConfigurationIfAvailable()) {
-    platform_configuration->UpdateLifecycleState(
+    platform_configuration->UpdateInitialLifecycleState(
         platform_data_.lifecycle_state);
     return true;
   }
@@ -211,7 +215,15 @@ bool RuntimeController::ReportTimings(std::vector<int64_t> timings) {
   return false;
 }
 
-bool RuntimeController::NotifyIdle(fml::TimePoint deadline) {
+bool RuntimeController::NotifyIdle(fml::TimeDelta deadline) {
+  if (deadline - fml::TimeDelta::FromMicroseconds(Dart_TimelineGetMicros()) <
+      fml::TimeDelta::FromMilliseconds(1)) {
+    // There's less than 1ms left before the deadline. Upstream callers do not
+    // check to see if the deadline is in the past, and work after this point
+    // will be in vain.
+    return false;
+  }
+
   std::shared_ptr<DartIsolate> root_isolate = root_isolate_.lock();
   if (!root_isolate) {
     return false;
@@ -219,13 +231,32 @@ bool RuntimeController::NotifyIdle(fml::TimePoint deadline) {
 
   tonic::DartState::Scope scope(root_isolate);
 
-  Dart_NotifyIdle(deadline.ToEpochDelta().ToMicroseconds());
+  Dart_PerformanceMode performance_mode =
+      PlatformConfigurationNativeApi::GetDartPerformanceMode();
+  if (performance_mode == Dart_PerformanceMode::Dart_PerformanceMode_Latency) {
+    return false;
+  }
+
+  Dart_NotifyIdle(deadline.ToMicroseconds());
 
   // Idle notifications being in isolate scope are part of the contract.
   if (idle_notification_callback_) {
     TRACE_EVENT0("flutter", "EmbedderIdleNotification");
-    idle_notification_callback_(deadline.ToEpochDelta().ToMicroseconds());
+    idle_notification_callback_(deadline.ToMicroseconds());
   }
+  return true;
+}
+
+bool RuntimeController::NotifyDestroyed() {
+  std::shared_ptr<DartIsolate> root_isolate = root_isolate_.lock();
+  if (!root_isolate) {
+    return false;
+  }
+
+  tonic::DartState::Scope scope(root_isolate);
+
+  Dart_NotifyDestroyed();
+
   return true;
 }
 
@@ -244,20 +275,20 @@ bool RuntimeController::DispatchPointerDataPacket(
     const PointerDataPacket& packet) {
   if (auto* platform_configuration = GetPlatformConfigurationIfAvailable()) {
     TRACE_EVENT0("flutter", "RuntimeController::DispatchPointerDataPacket");
-    platform_configuration->get_window(0)->DispatchPointerDataPacket(packet);
+    platform_configuration->DispatchPointerDataPacket(packet);
     return true;
   }
 
   return false;
 }
 
-bool RuntimeController::DispatchSemanticsAction(int32_t id,
+bool RuntimeController::DispatchSemanticsAction(int32_t node_id,
                                                 SemanticsAction action,
                                                 fml::MallocMapping args) {
   TRACE_EVENT1("flutter", "RuntimeController::DispatchSemanticsAction", "mode",
                "basic");
   if (auto* platform_configuration = GetPlatformConfigurationIfAvailable()) {
-    platform_configuration->DispatchSemanticsAction(id, action,
+    platform_configuration->DispatchSemanticsAction(node_id, action,
                                                     std::move(args));
     return true;
   }
@@ -272,6 +303,11 @@ RuntimeController::GetPlatformConfigurationIfAvailable() {
 }
 
 // |PlatformConfigurationClient|
+bool RuntimeController::ImplicitViewEnabled() {
+  return client_.ImplicitViewEnabled();
+}
+
+// |PlatformConfigurationClient|
 std::string RuntimeController::DefaultRouteName() {
   return client_.DefaultRouteName();
 }
@@ -283,7 +319,17 @@ void RuntimeController::ScheduleFrame() {
 
 // |PlatformConfigurationClient|
 void RuntimeController::Render(Scene* scene) {
-  client_.Render(scene->takeLayerTree());
+  // TODO(dkwingsmt): Currently only supports a single window.
+  int64_t view_id = kFlutterDefaultViewId;
+  auto window =
+      UIDartState::Current()->platform_configuration()->get_window(view_id);
+  if (window == nullptr) {
+    return;
+  }
+  const auto& viewport_metrics = window->viewport_metrics();
+  client_.Render(scene->takeLayerTree(viewport_metrics.physical_width,
+                                      viewport_metrics.physical_height),
+                 viewport_metrics.device_pixel_ratio);
 }
 
 // |PlatformConfigurationClient|
@@ -455,7 +501,8 @@ void RuntimeController::LoadDartDeferredLibrary(
 
 void RuntimeController::LoadDartDeferredLibraryError(
     intptr_t loading_unit_id,
-    const std::string error_message,
+    const std::string
+        error_message,  // NOLINT(performance-unnecessary-value-param)
     bool transient) {
   root_isolate_.lock()->LoadLoadingUnitError(loading_unit_id, error_message,
                                              transient);
@@ -463,6 +510,17 @@ void RuntimeController::LoadDartDeferredLibraryError(
 
 void RuntimeController::RequestDartDeferredLibrary(intptr_t loading_unit_id) {
   return client_.RequestDartDeferredLibrary(loading_unit_id);
+}
+
+bool RuntimeController::SetDisplays(const std::vector<DisplayData>& displays) {
+  TRACE_EVENT0("flutter", "SetDisplays");
+  platform_data_.displays = displays;
+
+  if (auto* platform_configuration = GetPlatformConfigurationIfAvailable()) {
+    platform_configuration->UpdateDisplays(displays);
+    return true;
+  }
+  return false;
 }
 
 RuntimeController::Locale::Locale(std::string language_code_,

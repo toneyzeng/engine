@@ -34,7 +34,7 @@ then
 fi
 
 # This script currently requires running `fx serve`.
-if [[ -z "$(pgrep -f 'pm serve')" ]]
+if [[ -z "$(pgrep -f 'package-tool')" ]]
 then
   engine-error "This script currently requires running 'fx serve' first."
   exit 1
@@ -47,15 +47,21 @@ shift # past argument
 # Ensure we know about the test and look up its packages.
 # The first package listed here should be the main package for the test
 # (the package that gets passed to `ffx test run`).
+# Note: You do not need to include oot_flutter_jit_runner-0.far, the script
+# automatically publishes it.
 test_packages=
 case $test_name in
   embedder)
     test_packages=("flutter-embedder-test-0.far" "parent-view.far" "child-view.far")
     ;;
   text-input)
-    # TODO(https://fxbug.dev/107917): Finish implementing and remove this warning.
-    engine-warning "This test currently hangs because the Dart view hasn't been implemented yet. https://fxbug.dev/107917"
     test_packages=("text-input-test-0.far" "text-input-view.far")
+    ;;
+  touch-input)
+    test_packages=("touch-input-test-0.far" "touch-input-view.far" "embedding-flutter-view.far")
+    ;;
+  mouse-input)
+    test_packages=("mouse-input-test-0.far" "mouse-input-view.far")
     ;;
   *)
     engine-error "Unknown test name $test_name. You may need to add it to $0"

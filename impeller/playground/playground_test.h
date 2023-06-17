@@ -7,8 +7,15 @@
 #include <memory>
 
 #include "flutter/fml/macros.h"
+#include "flutter/testing/test_args.h"
 #include "flutter/testing/testing.h"
+#include "impeller/geometry/scalar.h"
 #include "impeller/playground/playground.h"
+#include "impeller/playground/switches.h"
+
+#if FML_OS_MACOSX
+#include "flutter/fml/platform/darwin/scoped_nsautorelease_pool.h"
+#endif
 
 namespace impeller {
 
@@ -23,14 +30,26 @@ class PlaygroundTest : public Playground,
 
   void TearDown() override;
 
+  PlaygroundBackend GetBackend() const;
+
   // |Playground|
   std::unique_ptr<fml::Mapping> OpenAssetAsMapping(
       std::string asset_name) const override;
+
+  std::shared_ptr<RuntimeStage> OpenAssetAsRuntimeStage(
+      const char* asset_name) const;
 
   // |Playground|
   std::string GetWindowTitle() const override;
 
  private:
+  // |Playground|
+  bool ShouldKeepRendering() const;
+
+#if FML_OS_MACOSX
+  fml::ScopedNSAutoreleasePool autorelease_pool_;
+#endif
+
   FML_DISALLOW_COPY_AND_ASSIGN(PlaygroundTest);
 };
 

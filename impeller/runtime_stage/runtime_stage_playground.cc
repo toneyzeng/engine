@@ -8,27 +8,14 @@
 
 #include "flutter/fml/make_copyable.h"
 #include "flutter/testing/testing.h"
+#include "impeller/core/shader_types.h"
 #include "impeller/renderer/shader_library.h"
-#include "impeller/renderer/shader_types.h"
 
 namespace impeller {
 
 RuntimeStagePlayground::RuntimeStagePlayground() = default;
 
 RuntimeStagePlayground::~RuntimeStagePlayground() = default;
-
-std::unique_ptr<RuntimeStage> RuntimeStagePlayground::CreateStageFromFixture(
-    const std::string& fixture_name) const {
-  auto fixture = flutter::testing::OpenFixtureAsMapping(fixture_name);
-  if (!fixture || fixture->GetSize() == 0) {
-    return nullptr;
-  }
-  auto stage = std::make_unique<RuntimeStage>(std::move(fixture));
-  if (!stage->IsValid()) {
-    return nullptr;
-  }
-  return stage;
-}
 
 bool RuntimeStagePlayground::RegisterStage(const RuntimeStage& stage) {
   std::promise<bool> registration;

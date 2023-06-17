@@ -10,8 +10,6 @@ import 'dom.dart';
 import 'html/bitmap_canvas.dart';
 import 'html/recording_canvas.dart';
 import 'html_image_codec.dart';
-import 'safe_browser_api.dart';
-import 'util.dart';
 
 /// An implementation of [ui.PictureRecorder] backed by a [RecordingCanvas].
 class EnginePictureRecorder implements ui.PictureRecorder {
@@ -64,8 +62,8 @@ class EnginePicture implements ui.Picture {
     final String imageDataUrl = canvas.toDataUrl();
     final DomHTMLImageElement imageElement = createDomHTMLImageElement()
       ..src = imageDataUrl
-      ..width = width
-      ..height = height;
+      ..width = width.toDouble()
+      ..height = height.toDouble();
 
     // The image loads asynchronously. We need to wait before returning,
     // otherwise the returned HtmlImage will be temporarily unusable.
@@ -74,13 +72,13 @@ class EnginePicture implements ui.Picture {
     // Ignoring the returned futures from onError and onLoad because we're
     // communicating through the `onImageLoaded` completer.
     late final DomEventListener errorListener;
-    errorListener = allowInterop((DomEvent event) {
+    errorListener = createDomEventListener((DomEvent event) {
       onImageLoaded.completeError(event);
       imageElement.removeEventListener('error', errorListener);
     });
     imageElement.addEventListener('error', errorListener);
     late final DomEventListener loadListener;
-    loadListener = allowInterop((DomEvent event) {
+    loadListener = createDomEventListener((DomEvent event) {
       onImageLoaded.complete(HtmlImage(
         imageElement,
         width,
@@ -107,9 +105,16 @@ class EnginePicture implements ui.Picture {
 
   @override
   bool get debugDisposed {
-    if (assertionsEnabled) {
-      return _disposed;
+    bool? result;
+    assert(() {
+      result = _disposed;
+      return true;
+    }());
+
+    if (result != null) {
+      return result!;
     }
+
     throw StateError('Picture.debugDisposed is only available when asserts are enabled.');
   }
 

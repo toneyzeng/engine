@@ -119,8 +119,11 @@ class TextDimensions {
       ..fontFamily = canonicalizeFontFamily(fontFamily)!;
 
     final double? height = textHeightStyle.height;
-    if (height != null) {
-      style.lineHeight = height.toString();
+    // Workaround the rounding introduced by https://github.com/flutter/flutter/issues/122066
+    // in tests.
+    final double? effectiveLineHeight = height ?? (fontFamily == 'FlutterTest' ? 1.0 : null);
+    if (effectiveLineHeight != null) {
+      style.lineHeight = effectiveLineHeight.toString();
     }
     _invalidateBoundsCache();
   }
@@ -137,7 +140,7 @@ class TextDimensions {
 
   /// The height of the paragraph being measured.
   double get height {
-    double cachedHeight = _readAndCacheMetrics().height as double;
+    double cachedHeight = _readAndCacheMetrics().height;
     if (browserEngine == BrowserEngine.firefox &&
       // In the flutter tester environment, we use a predictable-size for font
       // measurement tests.
@@ -170,7 +173,7 @@ class TextHeightRuler {
   final TextDimensions _dimensions = TextDimensions(domDocument.createElement('flt-paragraph'));
 
   /// The alphabetic baseline for this ruler's [textHeightStyle].
-  late final double alphabeticBaseline = _probe.getBoundingClientRect().bottom.toDouble();
+  late final double alphabeticBaseline = _probe.getBoundingClientRect().bottom;
 
   /// The height for this ruler's [textHeightStyle].
   late final double height = _dimensions.height;
@@ -194,9 +197,10 @@ class TextHeightRuler {
       ..border = '0'
       ..padding = '0';
 
-    if (assertionsEnabled) {
+    assert(() {
       host.setAttribute('data-ruler', 'line-height');
-    }
+      return true;
+    }());
 
     _dimensions.applyHeightStyle(textHeightStyle);
 
@@ -208,8 +212,6 @@ class TextHeightRuler {
 
     _dimensions.appendToHost(host);
 
-    // [rulerHost] is not migrated yet so add a cast to [html.HtmlElement].
-    // This cast will be removed after the migration is complete.
     rulerHost.addElement(host);
     return host;
   }

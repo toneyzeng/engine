@@ -309,6 +309,12 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
           sendAccessibilityEvent(nodeId, AccessibilityEvent.TYPE_VIEW_LONG_CLICKED);
         }
 
+        /** The framework has requested focus on the given {@code nodeId}. */
+        @Override
+        public void onFocus(int nodeId) {
+          sendAccessibilityEvent(nodeId, AccessibilityEvent.TYPE_VIEW_FOCUSED);
+        }
+
         /** The user has opened a tooltip. */
         @Override
         public void onTooltip(@NonNull String message) {
@@ -885,7 +891,10 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     // Scopes routes are not focusable, only need to set the content
     // for non-scopes-routes semantics nodes.
     if (semanticsNode.hasFlag(Flag.IS_TEXT_FIELD)) {
-      result.setText(semanticsNode.getValueLabelHint());
+      result.setText(semanticsNode.getValue());
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        result.setHintText(semanticsNode.getTextFieldHint());
+      }
     } else if (!semanticsNode.hasFlag(Flag.SCOPES_ROUTE)) {
       CharSequence content = semanticsNode.getValueLabelHint();
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
@@ -1485,6 +1494,24 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * View#onHoverEvent(MotionEvent)}.
    */
   public boolean onAccessibilityHoverEvent(MotionEvent event) {
+    return onAccessibilityHoverEvent(event, false);
+  }
+
+  /**
+   * A hover {@link MotionEvent} has occurred in the {@code View} that corresponds to this {@code
+   * AccessibilityBridge}.
+   *
+   * <p>If {@code ignorePlatformViews} is true, if hit testing for the event finds a platform view,
+   * the event will not be handled. This is useful when handling accessibility events for views
+   * overlaying platform views. See {@code PlatformOverlayView} for details.
+   *
+   * <p>This method returns true if Flutter's accessibility system handled the hover event, false
+   * otherwise.
+   *
+   * <p>This method should be invoked from the corresponding {@code View}'s {@link
+   * View#onHoverEvent(MotionEvent)}.
+   */
+  public boolean onAccessibilityHoverEvent(MotionEvent event, boolean ignorePlatformViews) {
     if (!accessibilityManager.isTouchExplorationEnabled()) {
       return false;
     }
@@ -1493,17 +1520,21 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
     }
 
     SemanticsNode semanticsNodeUnderCursor =
-        getRootSemanticsNode().hitTest(new float[] {event.getX(), event.getY(), 0, 1});
+        getRootSemanticsNode()
+            .hitTest(new float[] {event.getX(), event.getY(), 0, 1}, ignorePlatformViews);
     // semanticsNodeUnderCursor can be null when hovering over non-flutter UI such as
     // the Android navigation bar due to hitTest() bounds checking.
     if (semanticsNodeUnderCursor != null && semanticsNodeUnderCursor.platformViewId != -1) {
+      if (ignorePlatformViews) {
+        return false;
+      }
       return accessibilityViewEmbedder.onAccessibilityHoverEvent(
           semanticsNodeUnderCursor.id, event);
     }
 
     if (event.getAction() == MotionEvent.ACTION_HOVER_ENTER
         || event.getAction() == MotionEvent.ACTION_HOVER_MOVE) {
-      handleTouchExploration(event.getX(), event.getY());
+      handleTouchExploration(event.getX(), event.getY(), ignorePlatformViews);
     } else if (event.getAction() == MotionEvent.ACTION_HOVER_EXIT) {
       onTouchExplorationExit();
     } else {
@@ -1536,12 +1567,12 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * a {@link AccessibilityEvent#TYPE_VIEW_HOVER_ENTER} event for the new hover node, followed by a
    * {@link AccessibilityEvent#TYPE_VIEW_HOVER_EXIT} event for the old hover node.
    */
-  private void handleTouchExploration(float x, float y) {
+  private void handleTouchExploration(float x, float y, boolean ignorePlatformViews) {
     if (flutterSemanticsTree.isEmpty()) {
       return;
     }
     SemanticsNode semanticsNodeUnderCursor =
-        getRootSemanticsNode().hitTest(new float[] {x, y, 0, 1});
+        getRootSemanticsNode().hitTest(new float[] {x, y, 0, 1}, ignorePlatformViews);
     if (semanticsNodeUnderCursor != hoveredObject) {
       // sending ENTER before EXIT is how Android wants it
       if (semanticsNodeUnderCursor != null) {
@@ -1858,7 +1889,8 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * <p>The given {@code viewId} may either belong to {@link #rootAccessibilityView}, or any Flutter
    * {@link SemanticsNode}.
    */
-  private void sendAccessibilityEvent(int viewId, int eventType) {
+  @VisibleForTesting
+  public void sendAccessibilityEvent(int viewId, int eventType) {
     if (!accessibilityManager.isEnabled()) {
       return;
     }
@@ -1951,10 +1983,15 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
    * invoked to create an {@link AccessibilityEvent} for the {@link #rootAccessibilityView}.
    */
   private AccessibilityEvent obtainAccessibilityEvent(int virtualViewId, int eventType) {
-    AccessibilityEvent event = AccessibilityEvent.obtain(eventType);
+    AccessibilityEvent event = obtainAccessibilityEvent(eventType);
     event.setPackageName(rootAccessibilityView.getContext().getPackageName());
     event.setSource(rootAccessibilityView, virtualViewId);
     return event;
+  }
+
+  @VisibleForTesting
+  public AccessibilityEvent obtainAccessibilityEvent(int eventType) {
+    return AccessibilityEvent.obtain(eventType);
   }
 
   /**
@@ -2616,7 +2653,15 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       return globalRect;
     }
 
-    private SemanticsNode hitTest(float[] point) {
+    /**
+     * Hit tests {@code point} to find the deepest focusable node in the node tree at that point.
+     *
+     * @param point The point to hit test against this node.
+     * @param stopAtPlatformView Whether to return a platform view if found, regardless of whether
+     *     or not it is focusable.
+     * @return The found node, or null if no relevant node was found at the given point.
+     */
+    private SemanticsNode hitTest(float[] point, boolean stopAtPlatformView) {
       final float w = point[3];
       final float x = point[0] / w;
       final float y = point[1] / w;
@@ -2628,12 +2673,13 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
         }
         child.ensureInverseTransform();
         Matrix.multiplyMV(transformedPoint, 0, child.inverseTransform, 0, point, 0);
-        final SemanticsNode result = child.hitTest(transformedPoint);
+        final SemanticsNode result = child.hitTest(transformedPoint, stopAtPlatformView);
         if (result != null) {
           return result;
         }
       }
-      return isFocusable() ? this : null;
+      final boolean foundPlatformView = stopAtPlatformView && platformViewId != -1;
+      return isFocusable() || foundPlatformView ? this : null;
     }
 
     // TODO(goderbauer): This should be decided by the framework once we have more information
@@ -2694,6 +2740,13 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       if (forceUpdate) {
         if (globalTransform == null) {
           globalTransform = new float[16];
+        }
+        if (transform == null) {
+          if (BuildConfig.DEBUG) {
+            Log.e(TAG, "transform has not been initialized for id = " + id);
+            accessibilityBridge.getRootSemanticsNode().log("Semantics tree:", true);
+          }
+          transform = new float[16];
         }
         Matrix.multiplyMM(globalTransform, 0, ancestorTransform, 0, transform, 0);
 
@@ -2767,18 +2820,47 @@ public class AccessibilityBridge extends AccessibilityNodeProvider {
       return Math.max(a, Math.max(b, Math.max(c, d)));
     }
 
-    private CharSequence getValueLabelHint() {
-      CharSequence[] array;
+    private CharSequence getValue() {
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-        array = new CharSequence[] {value, label, hint};
+        return value;
       } else {
-        array =
-            new CharSequence[] {
-              createSpannableString(value, valueAttributes),
-              createSpannableString(label, labelAttributes),
-              createSpannableString(hint, hintAttributes),
-            };
+        return createSpannableString(value, valueAttributes);
       }
+    }
+
+    private CharSequence getLabel() {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+        return label;
+      } else {
+        return createSpannableString(label, labelAttributes);
+      }
+    }
+
+    private CharSequence getHint() {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+        return hint;
+      } else {
+        return createSpannableString(hint, hintAttributes);
+      }
+    }
+
+    private CharSequence getValueLabelHint() {
+      CharSequence[] array = new CharSequence[] {getValue(), getLabel(), getHint()};
+      CharSequence result = null;
+      for (CharSequence word : array) {
+        if (word != null && word.length() > 0) {
+          if (result == null || result.length() == 0) {
+            result = word;
+          } else {
+            result = TextUtils.concat(result, ", ", word);
+          }
+        }
+      }
+      return result;
+    }
+
+    private CharSequence getTextFieldHint() {
+      CharSequence[] array = new CharSequence[] {getLabel(), getHint()};
       CharSequence result = null;
       for (CharSequence word : array) {
         if (word != null && word.length() > 0) {

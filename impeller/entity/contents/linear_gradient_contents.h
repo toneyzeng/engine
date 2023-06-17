@@ -9,10 +9,11 @@
 #include <vector>
 
 #include "flutter/fml/macros.h"
-#include "flutter/impeller/renderer/texture.h"
+#include "flutter/impeller/core/texture.h"
 #include "impeller/entity/contents/color_source_contents.h"
 #include "impeller/entity/entity.h"
 #include "impeller/geometry/color.h"
+#include "impeller/geometry/gradient.h"
 #include "impeller/geometry/path.h"
 #include "impeller/geometry/point.h"
 
@@ -23,6 +24,9 @@ class LinearGradientContents final : public ColorSourceContents {
   LinearGradientContents();
 
   ~LinearGradientContents() override;
+
+  // |Contents|
+  bool IsOpaque() const override;
 
   // |Contents|
   bool Render(const ContentContext& renderer,
@@ -42,6 +46,14 @@ class LinearGradientContents final : public ColorSourceContents {
   void SetTileMode(Entity::TileMode tile_mode);
 
  private:
+  bool RenderTexture(const ContentContext& renderer,
+                     const Entity& entity,
+                     RenderPass& pass) const;
+
+  bool RenderSSBO(const ContentContext& renderer,
+                  const Entity& entity,
+                  RenderPass& pass) const;
+
   Point start_point_;
   Point end_point_;
   std::vector<Color> colors_;

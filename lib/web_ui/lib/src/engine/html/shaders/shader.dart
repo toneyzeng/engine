@@ -8,11 +8,14 @@ import 'dart:typed_data';
 import 'package:ui/ui.dart' as ui;
 
 import '../../browser_detection.dart';
+import '../../color_filter.dart';
 import '../../dom.dart';
+import '../../embedder.dart';
 import '../../safe_browser_api.dart';
 import '../../util.dart';
 import '../../validators.dart';
 import '../../vector_math.dart';
+import '../color_filter.dart';
 import '../path/path_utils.dart';
 import '../render_vertices.dart';
 import 'normalized_gradient.dart';
@@ -66,11 +69,6 @@ class GradientSweep extends EngineGradient {
   GradientSweep(this.center, this.colors, this.colorStops, this.tileMode,
       this.startAngle, this.endAngle, this.matrix4)
       : assert(offsetIsValid(center)),
-        assert(colors != null),
-        assert(tileMode != null),
-        assert(startAngle != null),
-        assert(endAngle != null),
-        assert(startAngle < endAngle),
         super._() {
     validateColorStops(colors, colorStops);
   }
@@ -186,13 +184,13 @@ class GradientLinear extends EngineGradient {
     Float32List? matrix,
   )   : assert(offsetIsValid(from)),
         assert(offsetIsValid(to)),
-        assert(colors != null),
-        assert(tileMode != null),
         matrix4 = matrix == null ? null : FastMatrix32(matrix),
         super._() {
-    if (assertionsEnabled) {
+    // ignore: prefer_asserts_in_initializer_lists
+    assert(() {
       validateColorStops(colors, colorStops);
-    }
+      return true;
+    }());
   }
 
   final ui.Offset from;
@@ -411,13 +409,13 @@ void _addColorStopsToCanvasGradient(DomCanvasGradient gradient,
   }
   if (colorStops == null) {
     assert(colors.length == 2);
-    gradient.addColorStop(offset, colorToCssString(colors[0])!);
-    gradient.addColorStop(1 - offset, colorToCssString(colors[1])!);
+    gradient.addColorStop(offset, colors[0].toCssString());
+    gradient.addColorStop(1 - offset, colors[1].toCssString());
   } else {
     for (int i = 0; i < colors.length; i++) {
       final double colorStop = colorStops[i].clamp(0.0, 1.0);
       gradient.addColorStop(
-          colorStop * scale + offset, colorToCssString(colors[i])!);
+          colorStop * scale + offset, colors[i].toCssString());
     }
   }
   if (isDecal) {
@@ -448,7 +446,6 @@ String _writeSharedGradientShader(ShaderBuilder builder, ShaderMethod method,
     case ui.TileMode.clamp:
       method.addStatement('float tiled_st = clamp(st, 0.0, 1.0);');
       probeName = 'tiled_st';
-      break;
     case ui.TileMode.decal:
       break;
     case ui.TileMode.repeated:
@@ -457,13 +454,11 @@ String _writeSharedGradientShader(ShaderBuilder builder, ShaderMethod method,
       // pattern center is at origin.
       method.addStatement('float tiled_st = fract(st);');
       probeName = 'tiled_st';
-      break;
     case ui.TileMode.mirror:
       method.addStatement('float t_1 = (st - 1.0);');
       method.addStatement(
           'float tiled_st = abs((t_1 - 2.0 * floor(t_1 * 0.5)) - 1.0);');
       probeName = 'tiled_st';
-      break;
   }
   writeUnrolledBinarySearch(method, 0, gradient.thresholdCount - 1,
       probe: probeName,
@@ -770,4 +765,130 @@ class _MatrixEngineImageFilter extends EngineImageFilter {
   String toString() {
     return 'ImageFilter.matrix($webMatrix, $filterQuality)';
   }
+}
+
+/// The backend implementation of [ui.ColorFilter]
+///
+/// Currently only 'mode' and 'matrix' are supported.
+abstract class EngineHtmlColorFilter implements EngineImageFilter {
+  EngineHtmlColorFilter();
+
+  String? filterId;
+
+  @override
+  String get filterAttribute => (filterId != null) ? 'url(#$filterId)' : '';
+
+  @override
+  String get transformAttribute => '';
+
+  /// Make an [SvgFilter] and add it as a globabl resource using [flutterViewEmbedder]
+  /// The [DomElement] from the made [SvgFilter] is returned so it can be managed
+  /// by the surface calling it.
+  DomElement? makeSvgFilter(DomElement? filterElement);
+}
+
+class ModeHtmlColorFilter extends EngineHtmlColorFilter {
+  ModeHtmlColorFilter(this.color, this.blendMode);
+
+  final ui.Color color;
+  ui.BlendMode blendMode;
+
+  @override
+  DomElement? makeSvgFilter(DomElement? filterElement) {
+    switch (blendMode) {
+      case ui.BlendMode.clear:
+      case ui.BlendMode.dstOut:
+      case ui.BlendMode.srcOut:
+        filterElement!.style.visibility = 'hidden';
+        return null;
+      case ui.BlendMode.dst:
+      case ui.BlendMode.dstIn:
+        // Noop.
+        return null;
+      case ui.BlendMode.src:
+      case ui.BlendMode.srcOver:
+        // Uses source filter color.
+        // Since we don't have a size, we can't use background color.
+        // Use svg filter srcIn instead.
+        blendMode = ui.BlendMode.srcIn;
+      case ui.BlendMode.dstOver:
+      case ui.BlendMode.srcIn:
+      case ui.BlendMode.srcATop:
+      case ui.BlendMode.dstATop:
+      case ui.BlendMode.xor:
+      case ui.BlendMode.plus:
+      case ui.BlendMode.modulate:
+      case ui.BlendMode.screen:
+      case ui.BlendMode.overlay:
+      case ui.BlendMode.darken:
+      case ui.BlendMode.lighten:
+      case ui.BlendMode.colorDodge:
+      case ui.BlendMode.colorBurn:
+      case ui.BlendMode.hardLight:
+      case ui.BlendMode.softLight:
+      case ui.BlendMode.difference:
+      case ui.BlendMode.exclusion:
+      case ui.BlendMode.multiply:
+      case ui.BlendMode.hue:
+      case ui.BlendMode.saturation:
+      case ui.BlendMode.color:
+      case ui.BlendMode.luminosity:
+        break;
+    }
+
+    final SvgFilter svgFilter = svgFilterFromBlendMode(color, blendMode);
+    flutterViewEmbedder.addResource(svgFilter.element);
+    filterId = svgFilter.id;
+
+    if (blendMode == ui.BlendMode.saturation ||
+        blendMode == ui.BlendMode.multiply ||
+        blendMode == ui.BlendMode.modulate) {
+          filterElement!.style.backgroundColor = color.toCssString();
+    }
+    return svgFilter.element;
+  }
+}
+
+class MatrixHtmlColorFilter extends EngineHtmlColorFilter {
+  MatrixHtmlColorFilter(this.matrix);
+
+  final List<double> matrix;
+
+  @override
+  DomElement? makeSvgFilter(DomNode? filterElement) {
+    final SvgFilter svgFilter = svgFilterFromColorMatrix(matrix);
+    flutterViewEmbedder.addResource(svgFilter.element);
+    filterId = svgFilter.id;
+    return svgFilter.element;
+  }
+}
+
+/// Convert the current [ColorFilter] to an EngineHtmlColorFilter
+///
+/// This workaround allows ColorFilter to be const constructible and
+/// efficiently comparable, so that widgets can check for COlorFIlter equality to
+/// avoid repainting.
+EngineHtmlColorFilter? createHtmlColorFilter(EngineColorFilter? colorFilter) {
+  if (colorFilter == null) {
+    return null;
+  }
+  switch (colorFilter.type) {
+      case ColorFilterType.mode:
+        if (colorFilter.color == null || colorFilter.blendMode == null) {
+          return null;
+        }
+        return ModeHtmlColorFilter(colorFilter.color!, colorFilter.blendMode!);
+      case ColorFilterType.matrix:
+        if (colorFilter.matrix == null) {
+          return null;
+        }
+        assert(colorFilter.matrix!.length == 20, 'Color Matrix must have 20 entries.');
+        return MatrixHtmlColorFilter(colorFilter.matrix!);
+      case ColorFilterType.linearToSrgbGamma:
+        throw UnimplementedError('ColorFilter.linearToSrgbGamma not implemented for HTML renderer');
+      case ColorFilterType.srgbToLinearGamma:
+        throw UnimplementedError('ColorFilter.srgbToLinearGamma not implemented for HTML renderer.');
+      default:
+        throw StateError('Unknown mode $colorFilter.type for ColorFilter.');
+    }
 }

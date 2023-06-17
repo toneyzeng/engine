@@ -14,7 +14,7 @@ namespace flutter {
 
 sk_sp<GrDirectContext> ShellIOManager::CreateCompatibleResourceLoadingContext(
     GrBackend backend,
-    sk_sp<const GrGLInterface> gl_interface) {
+    const sk_sp<const GrGLInterface>& gl_interface) {
 #if SK_GL
   if (backend != GrBackend::kOpenGL_GrBackend) {
     return nullptr;
@@ -22,8 +22,7 @@ sk_sp<GrDirectContext> ShellIOManager::CreateCompatibleResourceLoadingContext(
 
   const auto options = MakeDefaultContextOptions(ContextType::kResource);
 
-  if (auto context =
-          GrDirectContext::MakeGL(std::move(gl_interface), options)) {
+  if (auto context = GrDirectContext::MakeGL(gl_interface, options)) {
     // Do not cache textures created by the image decoder.  These textures
     // should be deleted when they are no longer referenced by an SkImage.
     context->setResourceCacheLimit(0);
@@ -49,7 +48,8 @@ ShellIOManager::ShellIOManager(
       unref_queue_(fml::MakeRefCounted<flutter::SkiaUnrefQueue>(
           std::move(unref_queue_task_runner),
           unref_queue_drain_delay,
-          resource_context_)),
+          resource_context_,
+          /*drain_immediate=*/!!impeller_context)),
       is_gpu_disabled_sync_switch_(std::move(is_gpu_disabled_sync_switch)),
       impeller_context_(std::move(impeller_context)),
       weak_factory_(this) {

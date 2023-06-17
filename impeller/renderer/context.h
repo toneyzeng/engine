@@ -8,6 +8,8 @@
 #include <string>
 
 #include "flutter/fml/macros.h"
+#include "impeller/core/formats.h"
+#include "impeller/renderer/capabilities.h"
 
 namespace impeller {
 
@@ -16,17 +18,20 @@ class SamplerLibrary;
 class CommandBuffer;
 class PipelineLibrary;
 class Allocator;
-class WorkQueue;
 
-class Context : public std::enable_shared_from_this<Context> {
+class Context {
  public:
   virtual ~Context();
 
+  virtual std::string DescribeGpuModel() const = 0;
+
   virtual bool IsValid() const = 0;
 
-  //----------------------------------------------------------------------------
-  /// @return     A resource allocator.
-  ///
+  virtual const std::shared_ptr<const Capabilities>& GetCapabilities()
+      const = 0;
+
+  virtual bool UpdateOffscreenLayerPixelFormat(PixelFormat format);
+
   virtual std::shared_ptr<Allocator> GetResourceAllocator() const = 0;
 
   virtual std::shared_ptr<ShaderLibrary> GetShaderLibrary() const = 0;
@@ -36,12 +41,6 @@ class Context : public std::enable_shared_from_this<Context> {
   virtual std::shared_ptr<PipelineLibrary> GetPipelineLibrary() const = 0;
 
   virtual std::shared_ptr<CommandBuffer> CreateCommandBuffer() const = 0;
-
-  virtual std::shared_ptr<WorkQueue> GetWorkQueue() const = 0;
-
-  virtual bool HasThreadingRestrictions() const;
-
-  virtual bool SupportsOffscreenMSAA() const = 0;
 
  protected:
   Context();

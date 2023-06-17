@@ -18,6 +18,7 @@
 #include "third_party/skia/include/gpu/GrBackendSemaphore.h"
 #include "third_party/skia/include/gpu/GrBackendSurface.h"
 #include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/SkSurfaceGanesh.h"
 #include "vulkan/vulkan_core.h"
 #include "vulkan/vulkan_fuchsia.h"
 
@@ -184,7 +185,7 @@ VulkanSurface::~VulkanSurface() {
     if (buffer_id_) {
       session_->DeregisterBufferCollection(buffer_id_);
     }
-  } else {
+  } else if (release_image_callback_) {
     release_image_callback_();
   }
   wait_.Cancel();
@@ -432,17 +433,17 @@ bool VulkanSurface::SetupSkiaSurface(sk_sp<GrDirectContext> context,
   SkSurfaceProps sk_surface_props(0, kUnknown_SkPixelGeometry);
 
   auto sk_surface =
-      SkSurface::MakeFromBackendRenderTarget(context.get(),             //
-                                             sk_render_target,          //
-                                             kTopLeft_GrSurfaceOrigin,  //
-                                             color_type,                //
-                                             SkColorSpace::MakeSRGB(),  //
-                                             &sk_surface_props          //
+      SkSurfaces::WrapBackendRenderTarget(context.get(),             //
+                                          sk_render_target,          //
+                                          kTopLeft_GrSurfaceOrigin,  //
+                                          color_type,                //
+                                          SkColorSpace::MakeSRGB(),  //
+                                          &sk_surface_props          //
       );
 
   if (!sk_surface || sk_surface->getCanvas() == nullptr) {
     FML_LOG(ERROR)
-        << "VulkanSurface: SkSurface::MakeFromBackendRenderTarget failed";
+        << "VulkanSurface: SkSurfaces::WrapBackendRenderTarget failed";
     return false;
   }
   sk_surface_ = std::move(sk_surface);

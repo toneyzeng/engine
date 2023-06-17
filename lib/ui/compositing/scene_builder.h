@@ -74,6 +74,8 @@ class SceneBuilder : public RefCountedDartWrappable<SceneBuilder> {
                        const fml::RefPtr<EngineLayer>& oldLayer);
   void pushImageFilter(Dart_Handle layer_handle,
                        const ImageFilter* image_filter,
+                       double dx,
+                       double dy,
                        const fml::RefPtr<EngineLayer>& oldLayer);
   void pushBackdropFilter(Dart_Handle layer_handle,
                           ImageFilter* filter,
@@ -88,13 +90,6 @@ class SceneBuilder : public RefCountedDartWrappable<SceneBuilder> {
                       int blendMode,
                       int filterQualityIndex,
                       const fml::RefPtr<EngineLayer>& oldLayer);
-  void pushPhysicalShape(Dart_Handle layer_handle,
-                         const CanvasPath* path,
-                         double elevation,
-                         int color,
-                         int shadowColor,
-                         int clipBehavior,
-                         const fml::RefPtr<EngineLayer>& oldLayer);
 
   void addRetained(const fml::RefPtr<EngineLayer>& retainedLayer);
 

@@ -10,7 +10,7 @@
 
 #include "flutter/fml/macros.h"
 #include "fml/mapping.h"
-#include "impeller/renderer/shader_types.h"
+#include "impeller/core/shader_types.h"
 
 namespace impeller {
 
@@ -32,6 +32,8 @@ class ShaderLibrary : public std::enable_shared_from_this<ShaderLibrary> {
                                 ShaderStage stage,
                                 std::shared_ptr<fml::Mapping> code,
                                 RegistrationCallback callback);
+
+  virtual void UnregisterFunction(std::string name, ShaderStage stage) = 0;
 
  protected:
   ShaderLibrary();

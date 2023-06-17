@@ -116,9 +116,11 @@ struct GLProc {
   PROC(DetachShader);                        \
   PROC(Disable);                             \
   PROC(DisableVertexAttribArray);            \
+  PROC(DrawArrays);                          \
   PROC(DrawElements);                        \
   PROC(Enable);                              \
   PROC(EnableVertexAttribArray);             \
+  PROC(Flush);                               \
   PROC(FramebufferRenderbuffer);             \
   PROC(FramebufferTexture2D);                \
   PROC(FrontFace);                           \
@@ -162,7 +164,8 @@ struct GLProc {
   PROC(UniformMatrix4fv);                    \
   PROC(UseProgram);                          \
   PROC(VertexAttribPointer);                 \
-  PROC(Viewport);
+  PROC(Viewport);                            \
+  PROC(ReadPixels);
 
 #define FOR_EACH_IMPELLER_GLES3_PROC(PROC) PROC(BlitFramebuffer);
 
